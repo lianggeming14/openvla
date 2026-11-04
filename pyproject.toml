@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openvla-trajectory-tools"
-version = "0.1.0"
+version = "0.2.0"
 description = "Trajectory recording and evidence-based annotation for OpenVLA-OFT and LIBERO"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.23", "Pillow>=9"]
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+analysis = ["matplotlib>=3.7"]
+video = ["imageio>=2.31", "imageio-ffmpeg>=0.4.9"]
 
 [project.scripts]
 vla-trace = "vla_trajectory.cli:main"

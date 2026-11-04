@@ -10,8 +10,37 @@ import time
 
 import numpy as np
 
+from . import __version__
 from .libero import snapshot, sim_state
-from .recorder import EpisodeRecorder
+from .recorder import EpisodeRecorder, _read_json, _write_json, read_steps
+from .collection import resolve_plan, validate_plan
+
+
+def _observation_fields(observation, object_pair):
+    """Describe explicit sensors only; never guess poses from flattened sim state."""
+    def field(key, unit=None, order=None):
+        value = observation.get(key)
+        result = {'key': key, 'present': value is not None,
+                  'shape': None if value is None else list(np.asarray(value).shape)}
+        if unit:
+            result['unit'] = unit
+        if order:
+            result['order'] = order
+        return result
+    objects = list(object_pair or [])
+    if not objects:
+        objects = [key[:-4] for key in observation if key.endswith('_pos')
+                   and not key.startswith('robot') and '_to_' not in key]
+    return {'eef_position': field('robot0_eef_pos', 'm'),
+            'eef_quaternion': field('robot0_eef_quat', 'unit_quaternion', 'xyzw'),
+            'gripper_position': field('robot0_gripper_qpos', 'model_joint_native'),
+            'gripper_velocity': field('robot0_gripper_qvel', 'model_joint_native_per_s'),
+            'objects': {name: {'position': field(name + '_pos', 'm'),
+                               'quaternion': field(name + '_quat', 'unit_quaternion', 'xyzw')}
+                        for name in objects},
+            'available_numeric_keys': sorted(observation),
+            'pose_reference': 'world',
+            'source': 'LIBERO BDDLBaseDomain object sensors and robosuite SingleArm observables'}
 
 
 def _copy_observation(observation):
@@ -51,6 +80,9 @@ class _Proxy:
         try:
             obs = getattr(self._env, method)(*args, **kwargs)
             self._obs = _copy_observation(obs)
+            if self._steps == 0:
+                self._state['observation_fields'] = _observation_fields(
+                    self._obs, self._state['metadata'].get('analysis_object_pair'))
             return obs
         except BaseException as exc:
             self._state['error'] = f'{type(exc).__name__}: {exc}'
@@ -76,7 +108,17 @@ class _Proxy:
             before = _copy_observation(self._obs)
             executed = np.asarray(action).copy()
             evidence_before, sim_before = snapshot(self._env), sim_state(self._env)
-            result = self._env.step(action)
+            phase = 'settling' if self._steps < self._cfg.num_steps_wait else 'policy'
+            try:
+                result = self._env.step(action)
+            except BaseException:
+                # The simulator may have advanced before throwing: counts are a
+                # verified lower bound, never an invented completed transition.
+                state['step_count_complete'] = False
+                raise
+            state['executed_' + phase + '_steps'] += 1
+            record_step = self._steps
+            self._steps += 1
             if len(result) == 4:
                 after, reward, terminated, info = result
                 truncated = False
@@ -85,12 +127,12 @@ class _Proxy:
             else:
                 raise ValueError('Expected 4 or 5 environment step results')
             evidence_after, sim_after = snapshot(self._env), sim_state(self._env)
-            phase = 'settling' if self._steps < self._cfg.num_steps_wait else 'policy'
             limit = getattr(self._module, 'TASK_MAX_STEPS', {}).get(self._cfg.task_suite_name)
-            if limit is not None and self._steps + 1 >= limit + self._cfg.num_steps_wait and not terminated:
+            if limit is not None and self._steps >= limit + self._cfg.num_steps_wait and not terminated:
                 truncated = True
             context = {
                 'phase': phase,
+                'action_step_id': state['executed_policy_steps'] if phase == 'policy' else None,
                 'chunk_id': state['chunk_id'] if phase == 'policy' else None,
                 'chunk_index': state['chunk_index'] if phase == 'policy' else None,
                 'predicates_before': evidence_before['predicates'],
@@ -104,7 +146,7 @@ class _Proxy:
             for name, value in [('sim_state', sim_before), ('next_sim_state', sim_after)]:
                 if value is not None:
                     extra[name] = value
-            if self._steps == 0 and state['initial_state'] is not None:
+            if record_step == 0 and state['initial_state'] is not None:
                 extra['initial_state'] = state['initial_state']
             if phase == 'policy':
                 if state.get('raw_action') is not None:
@@ -120,8 +162,8 @@ class _Proxy:
             except Exception as exc:
                 state['recording_error'] = exc
                 raise
+            state['recorded_' + phase + '_steps'] += 1
             self._obs = _copy_observation(after)
-            self._steps += 1
             if phase == 'policy':
                 state['chunk_index'] += 1
                 state['query_pending'] = False
@@ -133,7 +175,7 @@ class _Proxy:
 
 
 @contextmanager
-def instrument(module, output_root, *, run_metadata=None):
+def instrument(module, output_root, *, run_metadata=None, collection_plan=None):
     """Wrap supported OFT functions for the lifetime of this context only.
 
     OFT's episode loop catches ordinary exceptions. Those errors are retained
@@ -151,6 +193,93 @@ def instrument(module, output_root, *, run_metadata=None):
         raise ValueError('OFT instrumentation is already active')
     original = {name: getattr(module, name) for name in required}
     active = [None]
+    plan = None if collection_plan is None else validate_plan(collection_plan)
+    resolved = [None]
+    selected_states = [None]
+    row_metadata = [None]
+    row_environment = [None]
+    task_signature = None
+    if plan is not None:
+        if not callable(getattr(module, 'run_task', None)):
+            raise ValueError('OFT evaluator missing required callable: run_task')
+        original['run_task'] = module.run_task
+        if callable(getattr(module, 'get_libero_env', None)):
+            original['get_libero_env'] = module.get_libero_env
+        task_signature = inspect.signature(module.run_task)
+        for name in ('cfg', 'task_suite', 'task_id', 'total_episodes', 'total_successes'):
+            if name not in task_signature.parameters:
+                raise ValueError(f'Unsupported run_task signature: missing {name}')
+
+    class SelectedStateSuite:
+        def __init__(self, suite, task_id, initial_state):
+            self._suite, self._task_id, self._initial_state = suite, task_id, initial_state
+        def __getattr__(self, name):
+            return getattr(self._suite, name)
+        def get_task_init_states(self, task_id):
+            if task_id != self._task_id:
+                raise ValueError('unexpected task in selected-state suite')
+            return [self._initial_state]
+
+    def run_task(*args, **kwargs):
+        bound = task_signature.bind(*args, **kwargs)
+        bound.apply_defaults()
+        cfg, suite, task_id = (bound.arguments[name] for name in ('cfg', 'task_suite', 'task_id'))
+        if cfg.task_suite_name != plan['task_suite_name']:
+            raise ValueError('collection task_suite_name conflicts with evaluator config')
+        if type(cfg.num_trials_per_task) is not int or cfg.num_trials_per_task != 1:
+            raise ValueError('collection requires num_trials_per_task=1')
+        if cfg.initial_states_path != 'DEFAULT':
+            raise ValueError('collection requires initial_states_path=DEFAULT')
+        if resolved[0] is None:
+            candidate, bank = resolve_plan(plan, suite)
+            # Snapshot selected states so later task/environment mutation cannot
+            # alter a fingerprinted initial condition.
+            states = [np.asarray(bank[i]).copy() for i in plan['init_state_indices']]
+            Path(output_root).mkdir(parents=True, exist_ok=True)
+            plan_path = Path(output_root) / f'collection_plan_{plan["plan_hash"]}.json'
+            if plan_path.exists() and _read_json(plan_path) != candidate:
+                raise ValueError('collection plan state bank differs from the persisted fingerprint')
+            _write_json(plan_path, candidate)
+            resolved[0], selected_states[0] = candidate, states
+        if task_id != resolved[0]['task_id']:
+            return bound.arguments['total_episodes'], bound.arguments['total_successes']
+        totals = bound.arguments['total_episodes'], bound.arguments['total_successes']
+        for row, initial_state in zip(resolved[0]['rows'], selected_states[0]):
+            bound.arguments['task_suite'] = SelectedStateSuite(suite, task_id, initial_state.copy())
+            bound.arguments['total_episodes'], bound.arguments['total_successes'] = totals
+            row_metadata[0] = row
+            primary_error = None
+            try:
+                totals = original['run_task'](*bound.args, **bound.kwargs)
+            except BaseException as exc:
+                primary_error = exc
+                raise
+            finally:
+                row_metadata[0] = None
+                env, row_environment[0] = row_environment[0], None
+                if env is not None and callable(getattr(env, 'close', None)):
+                    try:
+                        env.close()
+                    except BaseException as cleanup_error:
+                        if primary_error is None:
+                            raise
+                        # Keep the original exception object/type, including
+                        # KeyboardInterrupt/SystemExit. Attach cleanup evidence
+                        # on Python 3.10 too; 3.11+ also prints it in tracebacks.
+                        detail = f'{type(cleanup_error).__name__}: {cleanup_error}'
+                        primary_error.cleanup_errors = [*getattr(primary_error, 'cleanup_errors', []), detail]
+                        if callable(getattr(primary_error, 'add_note', None)):
+                            primary_error.add_note(f'Environment cleanup also failed: {detail}')
+        return totals
+
+    def get_libero_env(*args, **kwargs):
+        result = original['get_libero_env'](*args, **kwargs)
+        # Capture factory ownership before upstream pre-episode logging. The
+        # run_episode fallback still supports evaluator variants without a
+        # public factory, and the single row owns/ closes its environment once.
+        if row_metadata[0] is not None:
+            row_environment[0] = result[0]
+        return result
 
     @wraps(original['get_action'])
     def get_action(*args, **kwargs):
@@ -200,16 +329,26 @@ def instrument(module, output_root, *, run_metadata=None):
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
         cfg, env = bound.arguments['cfg'], bound.arguments['env']
+        if plan is not None and row_metadata[0] is None:
+            raise ValueError('collection episodes must be invoked through run_task')
+        if plan is not None:
+            row_environment[0] = env
         metadata = dict(run_metadata or {})
+        metadata.update(row_metadata[0] or {})
+        frequency = getattr(env, 'control_freq', getattr(getattr(env, 'env', None), 'control_freq', None))
+        metadata['control_freq'] = None if frequency is None else float(frequency)
         metadata.update(config=_config(cfg), task_description=bound.arguments['task_description'],
-            recorder='openvla-trajectory-tools/0.1.0', raw_image_orientation='libero_unmodified',
+            recorder=f'openvla-trajectory-tools/{__version__}', raw_image_orientation='libero_unmodified',
             bddl_file=str(getattr(env, 'bddl_file_name', getattr(getattr(env, 'env', None), 'bddl_file_name', ''))))
         supplied_initial = bound.arguments.get('initial_state')
         metadata['initial_state'] = None if supplied_initial is None else np.asarray(supplied_initial).tolist()
         recorder = EpisodeRecorder(output_root, metadata)
         state = {'recorder': recorder, 'chunk_id': -1, 'chunk_index': 0,
             'query_pending': False, 'initial_state': bound.arguments.get('initial_state'),
-            'error': None, 'recording_error': None}
+            'error': None, 'recording_error': None, 'metadata': metadata,
+            'executed_settling_steps': 0, 'executed_policy_steps': 0,
+            'recorded_settling_steps': 0, 'recorded_policy_steps': 0,
+            'step_count_complete': True, 'observation_fields': {}}
         active[0] = state
         bound.arguments['env'] = _Proxy(env, state, module, cfg)
         status = 'complete'
@@ -233,12 +372,46 @@ def instrument(module, output_root, *, run_metadata=None):
                 success = snapshot(env)['success']
                 outcome = 'unknown' if status != 'complete' or success is None else ('success' if success else 'failure')
                 recorder.finish(outcome=outcome, status=status, error=state['error'])
+                # The manifest, rather than append's return, is the commit
+                # boundary even when an exception arrived just after replace.
+                committed = read_steps(recorder.path)
+                for phase in ('settling', 'policy'):
+                    state['recorded_' + phase + '_steps'] = sum(
+                        step['context'].get('phase') == phase for step in committed)
+                execution = {'schema_version': 1, 'episode_id': recorder.manifest['episode_id'],
+                             **{key: state[key] for key in (
+                                 'executed_settling_steps', 'executed_policy_steps',
+                                 'recorded_settling_steps', 'recorded_policy_steps',
+                                 'step_count_complete', 'observation_fields')},
+                             'recording_complete': (state['step_count_complete']
+                                 and state['executed_settling_steps'] == state['recorded_settling_steps']
+                                 and state['executed_policy_steps'] == state['recorded_policy_steps']),
+                             'video_status': 'not_requested', 'video_error': None}
+                # Persist counts before invoking an optional codec, including
+                # when recording failed or the evaluator swallowed a sim error.
+                _write_json(recorder.path / 'execution.json', execution)
+                if plan is not None:
+                    try:
+                        from .video import export_episode_video
+                        output = export_episode_video(recorder.path)
+                        execution.update(video_status='complete', video_path=output.name)
+                    except Exception as exc:
+                        execution.update(video_status='error', video_error=f'{type(exc).__name__}: {exc}')
+                        _write_json(recorder.path / 'execution.json', execution)
+                        # Preserve any already-active episode/recording failure.
+                        if status == 'complete':
+                            raise RuntimeError(f'Episode video export failed: {exc}') from exc
+                    _write_json(recorder.path / 'execution.json', execution)
             finally:
                 active[0] = None
 
     module._vla_trace_active = True
     module.run_episode, module.get_action = run_episode, get_action
     module.process_action, module.log_message = process_action, log_message
+    if plan is not None:
+        module.run_task = run_task
+        if 'get_libero_env' in original:
+            module.get_libero_env = wraps(original['get_libero_env'])(get_libero_env)
     try:
         yield
     finally:

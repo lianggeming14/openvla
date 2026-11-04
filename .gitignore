@@ -9,6 +9,7 @@ data/
 trajectory-data/
 outputs/
 .work/
+.requirements-source/
 .env
 *.pt
 *.pth

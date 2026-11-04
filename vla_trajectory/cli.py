@@ -12,7 +12,11 @@ import sys
 
 
 def _json(value):
-    print(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False))
+    def encode(item):
+        if isinstance(item, Path):
+            return str(item)
+        raise TypeError(f'Cannot encode {type(item).__name__} as JSON')
+    print(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False, default=encode))
 
 
 def _collect(args):
@@ -22,6 +26,10 @@ def _collect(args):
         raise ValueError(f'OFT evaluator not found: {evaluator_path}')
     output = Path(args.output).expanduser().resolve()
     options = args.oft_args[1:] if args.oft_args[:1] == ['--'] else args.oft_args
+    plan = None
+    if args.plan:
+        from .collection import validate_plan
+        plan = validate_plan(json.loads(Path(args.plan).expanduser().read_text(encoding='utf-8')))
     try:
         revision = subprocess.run(['git','-C',str(root),'rev-parse','HEAD'],capture_output=True,text=True,check=True).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
@@ -37,7 +45,8 @@ def _collect(args):
         if Path(module.__file__).resolve() != evaluator_path:
             raise ValueError('Another OFT checkout is already imported; launch collect in a fresh Python process')
         from .oft import instrument
-        with instrument(module, output, run_metadata={'oft_root':str(root), 'oft_revision':revision}):
+        with instrument(module, output, run_metadata={'oft_root':str(root), 'oft_revision':revision},
+                        collection_plan=plan):
             module.eval_libero()
     finally:
         os.chdir(previous_cwd)
@@ -81,7 +90,29 @@ def main(argv=None):
     collect = sub.add_parser('collect', help='Run existing OFT eval with recording')
     collect.add_argument('--oft-root', required=True)
     collect.add_argument('--output', required=True)
+    collect.add_argument('--plan', help='Validated pilot/formal collection plan; place before --')
     collect.add_argument('oft_args', nargs=argparse.REMAINDER)
+    plan = sub.add_parser('plan', help='Write a five-state pilot or twenty-state formal plan')
+    plan.add_argument('--stage', required=True, choices=('pilot', 'formal'))
+    plan.add_argument('--output', required=True)
+    from .collection import DEFAULT_TASK_NAME
+    plan.add_argument('--task-name', default=DEFAULT_TASK_NAME)
+    plan.add_argument('--task-suite-name', default='libero_10')
+    plan.add_argument('--state-ids', nargs='+', type=int, help='Initial-state bank indices')
+    plan.add_argument('--objects', nargs=2, metavar=('A', 'B'))
+    video = sub.add_parser('video', help='Export recorded RGB frames including the final next_obs')
+    video.add_argument('episode')
+    video.add_argument('--output')
+    video.add_argument('--fps', type=float)
+    video.add_argument('--camera', default='agentview_image')
+    video.add_argument('--exclude-settling', action='store_true')
+    video.add_argument('--no-rotate180', action='store_true')
+    analyze = sub.add_parser('analyze', help='Export three statistics tables, figures and report')
+    analyze.add_argument('root')
+    analyze.add_argument('--output', required=True)
+    analyze.add_argument('--objects', nargs=2, metavar=('A', 'B'))
+    analyze.add_argument('--include-synthetic', action='store_true')
+    analyze.add_argument('--no-plots', action='store_true')
     for name in ('annotate','validate','summary'):
         sub.add_parser(name).add_argument('episode')
     review = sub.add_parser('review')
@@ -96,6 +127,33 @@ def main(argv=None):
             return _doctor(args)
         if args.command == 'collect':
             _collect(args)
+        elif args.command == 'plan':
+            from .collection import create_plan
+            document = create_plan(args.task_name, args.stage, args.state_ids,
+                                   task_suite_name=args.task_suite_name, object_pair=args.objects)
+            target = Path(args.output).expanduser().resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(document, ensure_ascii=False, indent=2, allow_nan=False) + '\n',
+                              encoding='utf-8')
+            _json({'path': target, 'stage': document['stage'],
+                   'states': len(document['init_state_indices']), 'plan_hash': document['plan_hash']})
+        elif args.command == 'video':
+            from .video import export_episode_video
+            output = None if args.output is None else Path(args.output).expanduser().resolve()
+            path = export_episode_video(Path(args.episode).expanduser().resolve(), output,
+                                        fps=args.fps, camera=args.camera,
+                                        include_settling=not args.exclude_settling,
+                                        rotate180=not args.no_rotate180)
+            _json({'path': path, 'sidecar': path.with_suffix('.json')})
+        elif args.command == 'analyze':
+            from .analysis import export_analysis
+            result = export_analysis(Path(args.root).expanduser().resolve(),
+                                     Path(args.output).expanduser().resolve(),
+                                     object_pair=args.objects, include_synthetic=args.include_synthetic,
+                                     plots=not args.no_plots)
+            _json({'episodes': len(result['episodes']), 'subtasks': len(result['subtasks']),
+                   'task_summary': len(result['task_summary']), 'paths': result['paths'],
+                   'plots': result['plots'], 'excluded_synthetic': result['excluded_synthetic']})
         elif args.command == 'demo':
             from .demo import create_demo
             print(create_demo(args.output))

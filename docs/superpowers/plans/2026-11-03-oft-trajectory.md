@@ -1,5 +1,7 @@
 # OFT trajectory implementation plan
 
+> 历史记录（2026-11-03）：下文保留当时的计划，不代表当前状态。私有原文已于 2026-11-04 完整读取；当前要求以 [原文对齐设计](../specs/2026-11-04-libero-long-requirements-design.md)、[新实施计划](2026-11-04-requirements-alignment.md) 和 [验收矩阵](../../REQUIREMENTS_TRACEABILITY.md) 为准。
+
 > **For agentic workers:** Use test-driven-development and scoped parallel implementation; root integrates and dispatches independent review.
 
 **Goal:** Record and annotate existing OFT LIBERO evaluations without changing inference.

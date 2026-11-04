@@ -52,6 +52,101 @@ def api():
     return importlib.import_module("vla_trajectory.annotations")
 
 
+def object_attempt(attempt_id="attempt-001", **changes):
+    value = {"attempt_id": attempt_id, "object": "soup", "start_frame": 0,
+             "end_frame": 1, "grasp_start_frame": 0, "grasp_frame": 0,
+             "place_start_frame": 1, "place_frame": 1,
+             "subtask_success": True, "source": "human_review", "notes": "人工"}
+    value.update(changes)
+    return value
+
+
+def test_v2_round_trip_retains_repeated_failed_place_only_and_unknown_attempts(tmp_path):
+    episode = make_episode(tmp_path, [({}, {}), ({}, {})])
+    document = api().load_annotations(episode)
+    assert document["schema_version"] == 2
+    assert document["object_attempts"] == [] and document["object_reviewed"] is False
+    document["object_attempts"] = [
+        object_attempt(subtask_success=False, place_frame=None, place_start_frame=None),
+        object_attempt("attempt-002", grasp_frame=None, grasp_start_frame=None),
+        object_attempt("attempt-003", object=None, start_frame=None, end_frame=None,
+                       grasp_start_frame=None, grasp_frame=None, place_start_frame=None,
+                       place_frame=None, subtask_success=None),
+    ]
+    document["object_reviewed"] = True
+    saved = api().save_annotations(episode, document)
+    assert api().load_annotations(episode) == saved
+    assert saved["object_attempts"] == document["object_attempts"]
+    stale = copy.deepcopy(document)
+    with pytest.raises(ValueError, match="revision"):
+        api().save_annotations(episode, stale)
+
+
+def test_legacy_load_migrates_and_import_preserves_v2_until_explicit_clear(tmp_path):
+    episode = make_episode(tmp_path, [({}, {}), ({}, {})])
+    legacy = blank_document()
+    (episode / "annotations.json").write_text(json.dumps(legacy), encoding="utf-8")
+    migrated = api().load_annotations(episode)
+    assert migrated["schema_version"] == 2 and migrated["object_reviewed"] is False
+    migrated["object_attempts"] = [object_attempt()]
+    migrated["object_reviewed"] = True
+    saved = api().save_annotations(episode, migrated)
+    legacy["revision"] = saved["revision"]
+    legacy["notes"] = "old editor"
+    merged = api().save_annotations(episode, legacy)
+    assert merged["object_attempts"] == saved["object_attempts"]
+    assert merged["object_reviewed"] is True
+    merged["object_attempts"] = []
+    merged["object_reviewed"] = False
+    assert api().save_annotations(episode, merged)["object_attempts"] == []
+
+
+@pytest.mark.parametrize("changes", [
+    {"grasp_frame": 2}, {"grasp_frame": True}, {"grasp_frame": -1},
+    {"start_frame": 1, "grasp_frame": 0}, {"place_start_frame": 0, "grasp_frame": 1},
+    {"end_frame": 0}, {"subtask_success": 1}, {"object": ""}, {"source": ""},
+    {"attempt_id": ""}, {"notes": []}, {"unexpected": 1},
+])
+def test_v2_attempt_validation_rejects_invalid_frames_and_types(tmp_path, changes):
+    episode = make_episode(tmp_path, [({}, {}), ({}, {})])
+    document = api().load_annotations(episode)
+    document["object_attempts"] = [object_attempt(**changes)]
+    with pytest.raises(ValueError, match="attempt"):
+        api().save_annotations(episode, document)
+    assert not (episode / "annotations.json").exists()
+
+
+def test_v2_rejects_duplicate_ids_invalid_review_flag_and_settling_events(tmp_path):
+    episode = make_episode(tmp_path, [({}, {}), ({}, {})])
+    document = api().load_annotations(episode)
+    document["object_attempts"] = [object_attempt(), object_attempt()]
+    with pytest.raises(ValueError, match="attempt"):
+        api().save_annotations(episode, document)
+    document["object_attempts"] = []
+    document["object_reviewed"] = 1
+    with pytest.raises(ValueError, match="object_reviewed"):
+        api().save_annotations(episode, document)
+    document["object_reviewed"] = False
+    document["object_attempts"] = [object_attempt()]
+    step_path = episode / "steps" / "000000.json"
+    step = json.loads(step_path.read_text(encoding="utf-8"))
+    step["context"]["phase"] = "settling"
+    step_path.write_text(json.dumps(step), encoding="utf-8")
+    with pytest.raises(ValueError, match="settling"):
+        api().save_annotations(episode, document)
+
+
+def test_v2_missing_operation_starts_default_to_unknown(tmp_path):
+    episode = make_episode(tmp_path, [({}, {}), ({}, {})])
+    document = api().load_annotations(episode)
+    attempt = object_attempt()
+    del attempt["grasp_start_frame"], attempt["place_start_frame"]
+    document["object_attempts"] = [attempt]
+    saved = api().save_annotations(episode, document)
+    assert saved["object_attempts"][0]["grasp_start_frame"] is None
+    assert saved["object_attempts"][0]["place_start_frame"] is None
+
+
 def compact_events(document):
     return [(event["frame"], event["predicate"], event["value"], event["kind"])
             for event in document["events"]]
@@ -174,7 +269,9 @@ def test_save_manual_fields_with_inclusive_ranges_and_reload(tmp_path):
 
 def test_loading_without_saved_document_is_read_only(tmp_path):
     episode = make_episode(tmp_path, [({}, {})])
-    assert api().load_annotations(episode) == blank_document(1)
+    expected = blank_document(1)
+    expected.update(schema_version=2, object_attempts=[], object_reviewed=False)
+    assert api().load_annotations(episode) == expected
     assert not (episode / "annotations.json").exists()
 
 

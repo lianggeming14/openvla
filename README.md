@@ -1,65 +1,38 @@
-# openvla — OFT / LIBERO 轨迹记录与标注
+# openvla · OFT / LIBERO 轨迹采集与顺序分析
 
-这是独立的采集工具库，接入你已经搭好的 **OpenVLA-OFT + LIBERO**。仓库名为 `openvla`，不是上游 OpenVLA 模型仓库，也不重复安装模型环境。
+本工具接入已经搭好的 **OpenVLA-OFT + LIBERO**，保存实际控制步骤，人工复核抓放尝试，导出三张 CSV、末端轨迹图和中文分析报告。不训练或改动模型。
 
-当前实现依据你确认的 OFT + LIBERO 环境。私有仓库中的《VLA 模型执行轨迹采集与任务顺序分析》正文尚未读取，不能宣称已逐项符合该方案。开发机的 CPU 测试不等于你的 A100 实测。
+已于 2026-11-04 完整读取私有原方案并补齐实现，证据见 [要求与验收矩阵](docs/REQUIREMENTS_TRACEABILITY.md)。当前代码版本 **0.2.0**。CPU 验证与真实实验分开：A100 上的五次试采、二十不同初态正式评测、真实视频及实验结论仍待执行。当前没有服务器连接或飞书发送认证，不能声称已验收或发送。
 
-## 已实现的功能
+## 安装到现有环境
 
-- **完整逐步记录**：主视角/腕部相机、数值观测（末端/夹爪/物体等，以环境实际提供字段为准）、动作前后状态、原始模型动作、实际执行动作、动作块编号与块内位置、查询时模型输入、初始状态及可用的模拟器状态。
-- **每回合独立保存**：配置、种子、任务文本、BDDL 路径、OFT Git 版本；成功、失败、异常、中断分开。稳定场景的等待步骤标记为 `settling`，策略步骤为 `policy`。
-- **自动标注**：使用 LIBERO 的 BDDL 目标谓词，记录初始状态、达成、撤销、未知。不是视觉模型猜标签；夹爪闭合不会直接标成抓取成功。
-- **人工复核**：生成可离线双击打开的 HTML，两路相机逐帧查看、前后观测切换、编辑时间段标签和结果、下载 JSON，再用命令导入。支持版本冲突检测，保留原始自动证据。
-- **顺序汇总**：首次观测为真、实际观测到的达成顺序和最终状态。该顺序仅是执行中观测到的顺序，不代表任务必须遵守的因果顺序。
+仓库：[lianggeming14/openvla](https://github.com/lianggeming14/openvla)。发行文件使用 [源码 ZIP](https://raw.githubusercontent.com/lianggeming14/openvla/main/downloads/openvla-source.zip) 与 [0.2.0 wheel](https://raw.githubusercontent.com/lianggeming14/openvla/main/downloads/openvla_trajectory_tools-0.2.0-py3-none-any.whl)；是否已发布以 [交付记录](docs/IMPLEMENTATION_STATUS.md) 为准。历史 0.1.0 wheel 保留，但不含本轮新增功能。
 
-## 1. 安装到现有环境
-
-仓库地址：[lianggeming14/openvla](https://github.com/lianggeming14/openvla)。可直接下载 [源码包](https://raw.githubusercontent.com/lianggeming14/openvla/main/downloads/openvla-source.zip) 和 [Python 安装包](https://raw.githubusercontent.com/lianggeming14/openvla/main/downloads/openvla_trajectory_tools-0.1.0-py3-none-any.whl)。
-
-在 A100 上激活你原本能运行 OFT 的 conda 环境，然后克隆并安装本工具库：
+在原本能运行 OFT 的 conda 环境中：
 
 ```bash
 git clone https://github.com/lianggeming14/openvla.git
 cd openvla
 python -m pip install -e . --no-deps --no-build-isolation
+python -m pip install 'matplotlib>=3.7' 'imageio>=2.31' 'imageio-ffmpeg>=0.4.9'
 python -m vla_trajectory doctor --oft-root /path/to/openvla-oft
 ```
 
-本工具需要 Python 3.10+、NumPy、Pillow；不安装或升级 torch、CUDA、transformers、LIBERO。若已有环境缺少 NumPy/Pillow，再单独安装。`--no-build-isolation` 要求已有 setuptools>=64 和 wheel。
+基础依赖为 Python 3.10+、NumPy、Pillow，安装要求已有 setuptools>=64、wheel。`analysis` extra 提供 Matplotlib，`video` extra 提供 imageio 与 FFmpeg；也可运行 `python -m pip install -e '.[analysis,video]' --no-build-isolation`。工具不声明或升级 torch、CUDA、transformers、LIBERO。`doctor` 只做预检，不证明模型加载、渲染或任务成功。
 
-采集钩子不改写 OFT 源码。它会调用原评测入口；[上游模型加载器](https://github.com/moojink/openvla-oft/blob/main/experiments/robot/openvla_utils.py) 本身可能更新本地 checkpoint 的配置和建模文件，这部分行为与直接运行原评测相同。
+## 双物体任务：先五次试采，再二十初态正式采集
 
-## 2. 先验证记录、标注链路
-
-```bash
-python -m vla_trajectory demo --output data/demo
-# 上条命令输出 EPISODE_DIR；下文用实际路径替换
-python -m vla_trajectory validate EPISODE_DIR
-python -m vla_trajectory annotate EPISODE_DIR
-python -m vla_trajectory review EPISODE_DIR --output outputs/review.html
-```
-
-将 HTML 复制到本机并双击打开。它不依赖服务器、网络或 GPU。编辑后点击下载，再执行：
+在本工具库根目录执行，替换两个绝对路径：
 
 ```bash
-python -m vla_trajectory import EPISODE_DIR /path/to/downloaded-annotations.json
-python -m vla_trajectory summary EPISODE_DIR
-```
+OFT_ROOT=/path/to/openvla-oft
+DATA_ROOT=/path/to/trajectory-data/libero10-order
+python -m vla_trajectory plan --stage pilot --output "$DATA_ROOT/plans/pilot.json"
+python -m vla_trajectory plan --stage formal --output "$DATA_ROOT/plans/formal.json"
 
-**下载不是保存到数据集**：只有 `import` 成功后，`annotations.json` 才更新。导入后若继续编辑，请重新导出 HTML，避免使用旧版本。重复 `annotate` 不覆盖人工标签。演示数据明确标记 `synthetic=true`，不能用作模型评测结果。
-
-只能向 `complete/error/interrupted` 回合保存标注；`recording` 状态只允许预览，以免新步骤让已保存标注失效。若标注写入进程崩溃留下 `.annotations.lock`，确认没有写入进程后再手动移除该锁文件。
-
-## 3. 接入你现有的 OFT 测试命令
-
-### 你提供的 LIBERO-10 / 4-bit 命令
-
-安装本工具后，在原来执行评测的 **OFT 仓库根目录**运行以下命令。模型及评测参数与你提供的命令完全相同，其他参数仍使用你当前 OFT 代码的默认值：
-
-```bash
 python -m vla_trajectory collect \
-  --oft-root "$PWD" \
-  --output ./trajectory-data/libero10-4bit \
+  --oft-root "$OFT_ROOT" --output "$DATA_ROOT/pilot" \
+  --plan "$DATA_ROOT/plans/pilot.json" \
   -- \
   --pretrained_checkpoint moojink/openvla-7b-oft-finetuned-libero-10 \
   --task_suite_name libero_10 \
@@ -67,97 +40,108 @@ python -m vla_trajectory collect \
   --load_in_4bit True
 ```
 
-也可以从本工具库运行现成的启动脚本：
+默认任务准确名称为 `LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket`，对象为 `alphabet_soup_1`、`tomato_sauce_1`。计划按名称解析真实 Task ID；试采索引 0–4，正式索引 0–19。执行前校验状态范围与内容互异，保存状态库指纹。`S000` 表示状态库索引 0。可用 `--state-ids 9 7 5 3 1` 选择试采初态；其他任务加 `--task-name EXACT_NAME --objects OBJECT_A OBJECT_B`，不会继承汤罐/番茄罐对象。模板位于 [plans/](plans/)。
 
-```bash
-bash scripts/collect_libero10_4bit.sh /path/to/openvla-oft /path/to/trajectory-data/libero10-4bit
-```
+计划模式仅运行所选任务，每个初态调用原 `run_task` 一次，保留 `num_trials_per_task=1`，由原 eval 初始化模型一次；要求 `initial_states_path=DEFAULT`。**全部模型参数放在 `--` 后原样转发**，保留用户四项参数，其余沿用现有 OFT 默认设置。钩子退出时恢复原函数，不改写 OFT 源文件；上游自身的 checkpoint 配置更新行为保持原样。
 
-标准 `libero_10` 含 10 个任务，`num_trials_per_task=1` 是每个任务一回合，正常完整运行约为 10 回合；不是只采一条轨迹。4-bit 设置由原 OFT 加载器处理，记录器不改动量化；本地只验证了参数转发，尚未在 A100 上加载这个 checkpoint。
-
-原始命令已收到并适配；仍需你 A100 上实际执行以验证模型加载、渲染及采集。采集完成后，按第 2 节对输出中的具体 episode 目录运行 annotate/review。
-
-### 通用接入方式
-
-假设原来在 OFT 目录执行：
-
-```bash
-python experiments/robot/libero/run_libero_eval.py \
-  --pretrained_checkpoint /path/to/checkpoint \
-  --task_suite_name libero_spatial \
-  --num_trials_per_task 1 \
-  --use_l1_regression True \
-  --use_proprio True \
-  --num_images_in_input 2 \
-  --num_open_loop_steps 8
-```
-
-现在把入口替换为下面这样，**`--` 后保留你原来已经验证可用的所有参数**，包括与你 checkpoint 匹配的 action head、proprio、FiLM、图像数等。上述参数只是结构示例，不能替代你 checkpoint 的配置。
+先完成下一节五个回合的核验，再正式采集：
 
 ```bash
 python -m vla_trajectory collect \
-  --oft-root /path/to/openvla-oft \
-  --output /path/to/trajectory-data \
+  --oft-root "$OFT_ROOT" --output "$DATA_ROOT/formal" \
+  --plan "$DATA_ROOT/plans/formal.json" \
   -- \
-  --pretrained_checkpoint /path/to/checkpoint \
-  --task_suite_name libero_spatial \
+  --pretrained_checkpoint moojink/openvla-7b-oft-finetuned-libero-10 \
+  --task_suite_name libero_10 \
   --num_trials_per_task 1 \
-  --use_l1_regression True \
-  --use_proprio True \
-  --num_images_in_input 2 \
-  --num_open_loop_steps 8
+  --load_in_4bit True
 ```
 
-采集入口临时包裹 OFT 的评测函数，仍由原脚本处理 checkpoint、推理、动作队列、gripper 转换、初始化和任务循环；退出后恢复函数，不改写 OFT 源文件。当前支持官方具有 `run_episode/get_action/process_action/log_message` 的评测模块。你的适配版若改了接口，先对照 [接入与验收说明](docs/A100_ACCEPTANCE.md)。
+不带 `--plan` 仍支持原全部套件采集与 `scripts/collect_libero10_4bit.sh`。该模式下 `libero_10`、每任务一次通常为十个任务各一回合，不能代替单任务二十初态实验；自动完整视频导出仅在计划采集模式触发。
 
-`num_trials_per_task=1` 通常仍会运行任务套件的多个任务，不等于只运行一个 episode。先用已有的单任务配置试采；需要中途停止时 Ctrl+C 会保留已提交的步骤及 interrupted 状态。
+## 逐回合复核与视频
 
-## 数据目录
+用实际 episode 路径替换 `EPISODE_DIR`：
+
+```bash
+python -m vla_trajectory validate EPISODE_DIR
+python -m vla_trajectory annotate EPISODE_DIR
+python -m vla_trajectory review EPISODE_DIR --output outputs/review.html
+# 将 HTML 复制到本机双击，复核后下载 JSON
+python -m vla_trajectory import EPISODE_DIR /path/to/downloaded-annotations.json
+python -m vla_trajectory summary EPISODE_DIR
+```
+
+离线 HTML 支持两路相机、连续播放、逐帧/动作步定位、结构化尝试表和当前帧设置抓/放。每次尝试使用独立 ID，保留重复对象、失败重试与顺序变化。填写对象、尝试起止、抓取操作起点/事件、放置操作起点/事件与 true/false/null 子任务结果；未知留空，不能以目标谓词或夹爪闭合替代抓取证据。完成核对后勾选 `object_reviewed`。自动谓词与人工抓放分别保存。
+
+原始 frame 从 0 开始并包含 settling；**Action Step 从 1 开始，只计实际 policy `env.step`，不计推理查询或 settling**。事件对应动作后 `next_obs`。操作步数用人工起点至事件的 policy 步数，包含两端；抓到放的事件间隔另列，不当作纯放置耗时。缺边界或未知阶段不估算。
+
+下载后必须 `import` 才写回数据集；修订冲突或证据变化会拒绝导入，继续编辑前重新导出 HTML。旧 v1 标注在内存迁移到 v2，旧导入保留已有抓放尝试。`recording` 回合仅预览，终态才能保存。
+
+计划采集自动生成带任务、初态、episode ID 的 MP4 与同名 JSON 帧映射。完整视频为首个 `obs` 加每一步 `next_obs`，包含终态及默认的 settling。编码失败写入 `execution.json` 并返回错误，不能算完整交付。独立导出或补导视频：
+
+```bash
+python -m vla_trajectory video EPISODE_DIR
+python -m vla_trajectory video EPISODE_DIR --output outputs/check.mp4 --fps 10
+```
+
+不覆盖已有 MP4/sidecar。默认主视角并旋转 180°；可用 `--camera robot0_eye_in_hand_image`、`--no-rotate180`、`--exclude-settling`。播放 fps 与真实 `control_freq` 分别记录。补导后重新分析并核验完整性，保留原 execution 错误作为运行证据。
+
+## 三张表、图与报告
+
+完成正式阶段的逐回合复核导入后：
+
+```bash
+python -m vla_trajectory analyze "$DATA_ROOT/formal" \
+  --output outputs/libero10-formal \
+  --objects alphabet_soup_1 tomato_sauce_1
+```
+
+命令返回简洁 JSON 计数与路径，生成：
+
+- `episode_statistics.csv`：任务/初态/回合、完整抓取序列、官方成功、总控制步数、EEF 长度及覆盖/缺失指标。
+- `subtask_events.csv`：每次尝试一行，抓/放动作步、独立操作步数、尝试范围、结果与备注。
+- `task_summary.csv`：分任务、阶段、对象对汇总成功率、A→B/B→A 比例、平均成功步数与不同初态数。
+- `plots/*_eef.png`、`plots/*_eef.svg`：等比例 XYZ 路径、坐标随动作步变化，标记人工抓/放事件。
+- `analysis_report.md`：中文样本范围、顺序观察、成功率与步数分布，列出未知、缺失及视频覆盖。
+
+成功率分母只含 `manifest.outcome` 的官方已知成功/失败，未知另计；人工结果不覆盖官方结果。平均成功步数只用官方成功且执行计数可信的回合。对象对顺序比例只用已复核、可比较样本，并列/未知单列；完整序列保留 A→B→A。pilot/formal 分组，不拿试采补正式数量。
+
+EEF 长度为所有 policy transition 的 `norm(next_xyz-obs_xyz)` 之和，包括第一个动作、排除 settling。任何应计坐标缺失令完整长度未知，提供已观测长度/覆盖率，图不跨缺口连线。已执行与已记录步数分开，环境步异常无法确认时 Total Steps 留空，执行数只作下界。观察到顺序偏好或变化不能证明主动规划、因果关系或最优路径。
+
+## Synthetic 开发演示
+
+```bash
+python -m vla_trajectory demo --output data/demo
+# 用 demo 输出路径替换 EPISODE_DIR
+python -m vla_trajectory review EPISODE_DIR --output outputs/demo-review.html
+python -m vla_trajectory analyze data/demo --output outputs/demo-analysis --include-synthetic
+```
+
+默认排除 synthetic，显式包含后报告/图均标演示；`--no-plots` 可只导表与报告。演示不产生真实模型结论，不算 A100 验收。
+
+## 数据与验证边界
 
 ```text
 trajectory-data/
+  collection_plan_<hash>.json   # 解析任务、状态指纹、行清单
   <episode-id>/
-    manifest.json           # 元信息、状态、已提交步数和结果
-    steps/
-      000000.json           # 时间、奖励、终止标志、动作块、谓词证据
-      000000.npz            # obs/*、next_obs/*、action、extra/*
-    annotations.json        # 自动事件及经导入的人工标注
+    manifest.json              # 元信息、官方结果、已提交步数
+    execution.json             # 执行/记录计数、完整性、传感器映射、视频状态
+    steps/000000.json          # 时间、phase、动作块、谓词证据
+    steps/000000.npz           # obs/*、next_obs/*、action、extra/*，禁用 pickle
+    annotations.json           # v2 人工尝试与受保护的自动证据
+    task-*_init-*_episode-*.mp4
+    task-*_init-*_episode-*.json
 ```
 
-NPZ 禁止 pickle；每步先原子写入数组和记录，再提交 manifest 步数。记录期间异常退出的目录不能当作完整回合。工具不恢复未执行的动作，也不保证断电/磁盘故障下零数据丢失；manifest 范围外的孤立文件不会被读入。
-
-原始相机方向保持 LIBERO 输出，查看时可能需要翻转；策略预处理后的图像另存在查询步骤的 `extra/policy_*` 中，避免混淆。RGB 和前后状态会占用磁盘，同步压缩/落盘也会增加评测耗时；先测 1 个 trial 的容量和时间，再扩大规模。每次模型查询的完整动作块仅存于首次执行步 `extra/query_actions`，该查询后未执行的动作不算 transition。若查询后执行失败，失败前的完整 transition 保留，未完成查询/动作不作为独立事件持久化。
-
-`chunk_index` 指向完整模型输出中的行。官方 OFT 使用有容量上限的 deque：当 `num_open_loop_steps` 小于模型输出长度时，会丢弃块前部动作，因此首个执行索引可能不为 0；记录器保留这一原有行为。若你的适配版更改了动作队列规则，需要一并调整记录索引。
-
-## 测试与发布
+`execution.observation_fields` 报告 EEF/夹爪/目标物体的实际键、维度、存在情况、单位/四元数顺序，不从扁平 `sim_state` 猜位姿。每步原子落盘，manifest 范围外孤立文件不读入。同步图像/NPZ 增加耗时与容量，先实测五次试采。完整模型动作块只存于首次执行步，未执行动作不计 transition；`chunk_index` 保留真实源索引，短 deque 丢弃块前部时可不从 0 开始。
 
 ```bash
-python -m pip install pytest
+python -m pip install -e '.[test,analysis,video]'
 python -m pytest -q
 ```
 
-CI 仅覆盖 CPU 工具链；真实 A100 验收见 [清单](docs/A100_ACCEPTANCE.md)。代码与数据分离，`data/outputs/`、权重、缓存和 `.env` 被 Git 忽略。
+CI 安装全部 extras 并运行真实 MP4 编码/解码测试。本地没有 imageio_ffmpeg/FFmpeg，该项明确 skip；帧序/终态/映射/错误测试使用编码边界替身，不等于实际编码通过。真实验收见 [A100 清单](docs/A100_ACCEPTANCE.md)，发布验证见 [交付记录](docs/IMPLEMENTATION_STATUS.md)。
 
-更新本仓库时，在自己的可写克隆中提交更改并推送至现有 remote。下面的发布脚本保留为首次创建新仓库时的工具；当前 `lianggeming14/openvla` 已存在，脚本会按设计拒绝重复创建。
-
-首次建库时，具备 GitHub CLI、GitHub 登录及联网权限后，可在本库完成提交并运行：
-
-```bash
-git init -b main
-git add .github .gitignore docs pyproject.toml README.md scripts tests vla_trajectory
-git commit -m "Add OFT LIBERO trajectory recording and annotation"
-python scripts/publish_github.py --owner lianggeming14
-```
-
-提交使用你已有的 Git 身份设置。若当前工作区的 `.git` 为只读，把 `dist/openvla-source.zip` 解压到普通可写目录再执行。
-
-脚本核对当前登录账号，只创建新的私有 `lianggeming14/openvla`，拒绝覆盖已有同名库或已有 remote。它不会创建凭据、上传数据目录或替你修改现有仓库。
-
-## 上游接口依据
-
-- [OpenVLA-OFT 评测入口](https://github.com/moojink/openvla-oft/blob/main/experiments/robot/libero/run_libero_eval.py)：动作分块、预处理和评测函数。
-- [LIBERO 环境封装](https://github.com/Lifelong-Robot-Learning/LIBERO/blob/master/libero/libero/envs/env_wrapper.py)：success、初始状态和模拟器状态接口。
-- [LIBERO 谓词检查](https://github.com/Lifelong-Robot-Learning/LIBERO/blob/master/libero/libero/envs/problems/libero_tabletop_manipulation.py)：从目标表达式逐项求值。
-
-接口在 2026-11-03 查阅。真实运行会记录本机 OFT commit；若上游或你的适配发生变化，以你实际代码为准。
+公开交付仅含代码、测试、脚本、正式文档与明确的源码/安装包；私有原文、权重、原始轨迹、缓存与凭据不上传。GitHub 更新以远程核验为准；飞书待可用连接和明确接收位置，当前尚未发送。

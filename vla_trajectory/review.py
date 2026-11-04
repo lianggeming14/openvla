@@ -70,7 +70,8 @@ def export_review(episode_path: str | Path, output_html: str | Path) -> Path:
     Downloaded annotations include the original ``base_revision`` so the CLI
     can reject stale edits when importing them. Images are embedded JPEGs with
     maximum dimensions 640×480; raw observations and automatic evidence remain
-    in their original files.
+    in their original files. Output must have an .html or .htm suffix, so a
+    mistaken evidence-file destination is rejected before any file is written.
     """
     episode_path = Path(episode_path)
     output_html = Path(output_html)
@@ -78,13 +79,23 @@ def export_review(episode_path: str | Path, output_html: str | Path) -> Path:
     protected = {episode_root / "manifest.json", episode_root / "annotations.json"}
     if destination in protected or (episode_root / "steps") in destination.parents:
         raise ValueError("review output cannot overwrite original episode files")
+    if (output_html.suffix.lower() not in (".html", ".htm")
+            or destination.suffix.lower() not in (".html", ".htm")):
+        raise ValueError("review output must be an HTML file with .html or .htm extension")
     manifest = read_manifest(episode_path)
     annotations = load_annotations(episode_path)
     frames = []
+    action_step, numbering_known = 0, True
     for step in read_steps(episode_path):
         arrays = load_arrays(episode_path, step["index"])
+        phase = step.get("context", {}).get("phase")
+        if phase not in ("policy", "settling"):
+            numbering_known = False
+        if phase == "policy":
+            action_step += 1
         frames.append({
             "index": step["index"], "reward": step["reward"],
+            "action_step": action_step if phase == "policy" and numbering_known else None,
             "terminated": step["terminated"], "truncated": step["truncated"],
             "context": step.get("context", {}), "action": arrays["action"].tolist(),
             "cameras": {
@@ -151,6 +162,7 @@ summary{cursor:pointer;font-weight:600}code{font-size:12px;overflow-wrap:anywher
 <div class="panel notice"><strong>下载后仍需通过 CLI 导入。</strong>此页面完全离线，不连接服务器；修改只保存在当前页面内存中，关闭或刷新页面会丢失未下载的修改。下载 JSON 后请运行 CLI 的 import 命令导入对应 episode，才能保存标注。原始轨迹和自动谓词证据不会被页面修改。</div>
 <section class="panel" aria-label="帧和相机">
 <div class="controls"><button id="previous" type="button">← 上一帧</button><input id="frame-slider" aria-label="轨迹帧" type="range" min="0" value="0" step="1"><button id="next" type="button">下一帧 →</button><label>跳转 <input id="frame-number" type="number" min="0" value="0" step="1"></label><strong id="frame-label"></strong><label><input id="show-after" type="checkbox">显示动作执行后的观测</label></div>
+<div class="controls"><button id="play-pause" type="button">连续播放</button><label>播放 fps <input id="play-fps" type="number" min="1" max="60" value="10"></label><label>Action Step 跳转 <input id="action-number" type="number" min="1" step="1"></label></div>
 <p class="muted" id="frame-context"></p>
 <div class="cameras">
 <div class="camera"><h3>场景相机 · agentview</h3><div class="image-wrap"><img id="camera-agentview_image" alt="场景相机预览" hidden><p id="missing-agentview_image"></p></div><p id="info-agentview_image" class="image-info muted"></p></div>
@@ -166,6 +178,9 @@ summary{cursor:pointer;font-weight:600}code{font-size:12px;overflow-wrap:anywher
 <p class="muted">自动事件记录观测到的真值变化；缺失证据表示未知。事件先后不表示因果关系或任务必需顺序。</p></section>
 <section class="panel"><h2>人工标注</h2><p class="muted">区间使用从 0 开始的帧编号。可重叠；每个区间都需要标签。</p><div id="segments"></div><button id="add-segment" type="button">＋ 添加当前帧区间</button>
 <hr style="border:0;border-top:1px solid #e1e7ec;margin:20px 0">
+<h3>抓放尝试</h3><p class="muted">下表输入从 1 开始的 Action Step，仅计 policy 环境动作。原始 frame 从 0 开始并包含 settling。留空表示未知；重复物体和失败重试分别添加。抓/放事件使用该动作后的 next_obs；操作起点用于计算抓取/放置耗时。未知阶段的原始引用可切换为 frame 编辑。</p>
+<label><input id="object-reviewed" type="checkbox">已完成抓放复核（包括确认无抓取）</label>
+<div id="object-attempts"></div><button id="add-attempt" type="button">＋ 添加抓放尝试</button>
 <div class="stack"><label>人工审阅结果 <select id="outcome"><option value="unknown">未知 / 尚未确定</option><option value="success">成功</option><option value="failure">失败</option></select></label><label for="episode-notes">Episode 备注</label><textarea id="episode-notes" placeholder="记录判断依据或需要回看的问题"></textarea><button class="primary" id="download" type="button">下载标注 JSON</button><div id="save-status" class="status" role="status" aria-live="polite"></div></div>
 <p class="muted" id="revision"></p><code id="import-command"></code></section>
 <section class="panel wide"><details><summary>Episode 元数据与录制状态</summary><pre id="manifest"></pre></details></section>
@@ -179,13 +194,18 @@ const frames = data.frames;
 const original = data.annotations;
 let currentFrame = 0;
 const segmentRows = [];
+const attemptRows = [];
+const attemptFrameFields = ['start_frame','grasp_start_frame','grasp_frame','place_start_frame','place_frame','end_frame'];
+const attemptFrameLabels = ['尝试起点','抓取操作起点','抓取事件','放置操作起点','放置事件','尝试终点'];
+let playing = false, playbackGeneration = 0;
 const pretty = value => JSON.stringify(value, null, 2);
 const truth = value => value === true ? '真' : value === false ? '假' : '未知';
 function textElement(tag, text) { const node = document.createElement(tag); node.textContent = text; return node; }
 function renderFrame() {
   const frame = frames[currentFrame];
   const phase = $('show-after').checked ? 'after' : 'before';
-  $('frame-label').textContent = frame ? `帧 ${currentFrame} / ${frames.length - 1}` : '无已提交帧';
+  $('frame-label').textContent = frame ? `原始帧 ${currentFrame} / ${frames.length - 1} · ${frame.action_step === null ? (frame.context.phase === 'settling' ? 'settling（无动作步）' : 'Action Step 未知') : 'Action Step ' + frame.action_step}` : '无已提交帧';
+  $('action-number').value = frame && frame.action_step !== null ? String(frame.action_step) : '';
   $('frame-slider').value = String(currentFrame); $('frame-number').value = String(currentFrame);
   $('previous').disabled = !frame || currentFrame === 0;
   $('next').disabled = !frame || currentFrame === frames.length - 1;
@@ -256,8 +276,105 @@ function buildReviewDocument() {
   const document = JSON.parse(JSON.stringify(original));
   document.base_revision = original.revision;
   document.segments = segments; document.outcome = outcome; document.notes = String($('episode-notes').value);
+  document.object_attempts = attemptRows.map(readAttempt);
+  document.object_reviewed = $('object-reviewed').checked;
   return document;
 }
+function addAttempt(attempt) {
+  const row = document.createElement('div'); row.className = 'segment';
+  const record = {row, attempt_id: attempt.attempt_id, source: attempt.source, setButtons: {}};
+  row.appendChild(textElement('strong', attempt.attempt_id));
+  const object = document.createElement('input'); object.value = attempt.object === null ? '' : attempt.object;
+  const objectLabel = textElement('label', '物体（空为未知） '); objectLabel.appendChild(object); row.appendChild(objectLabel); record.object = object;
+  const units = document.createElement('select');
+  for (const [value, label] of [['action','Action Step（从1开始）'],['frame','原始 frame（从0开始）']]) {
+    const option = textElement('option', label); option.value = value; units.appendChild(option);
+  }
+  units.value = attemptFrameFields.some(field => attempt[field] !== null && (!frames[attempt[field]] || frames[attempt[field]].action_step === null)) ? 'frame' : 'action';
+  record.units = units; row.appendChild(units);
+  const setValues = raw => { for (const field of attemptFrameFields) record[field].value = raw[field] === null ? '' : String(units.value === 'frame' ? raw[field] : frames[raw[field]].action_step); };
+  for (let index = 0; index < attemptFrameFields.length; index++) {
+    const field = attemptFrameFields[index], input = document.createElement('input'); input.type = 'number'; input.step = '1';
+    const label = textElement('label', attemptFrameLabels[index] + ' '); label.appendChild(input); record[field] = input;
+    const button = textElement('button', '设为当前帧'); button.type = 'button'; record.setButtons[field] = button;
+    button.addEventListener('click', () => {
+      const frame = frames[currentFrame];
+      if (!frame) return;
+      if (units.value === 'action' && frame.action_step === null) { $('save-status').textContent = '当前帧没有可证明的 Action Step，请切换原始 frame；settling 不能标注抓放。'; return; }
+      input.value = String(units.value === 'frame' ? currentFrame : frame.action_step);
+      if (field === 'grasp_frame' || field === 'place_frame') { $('show-after').checked = true; renderFrame(); }
+    });
+    row.append(label, button);
+  }
+  setValues(attempt);
+  let oldUnits = units.value;
+  units.addEventListener('change', () => {
+    const selected = units.value; units.value = oldUnits;
+    try {
+      const raw = readAttemptFrames(record);
+      if (selected === 'action' && attemptFrameFields.some(field => raw[field] !== null && frames[raw[field]].action_step === null)) throw Error('这些原始帧的动作步未知，请保留原始 frame 引用。');
+      units.value = selected; setValues(raw); oldUnits = selected;
+    } catch (error) { units.value = oldUnits; $('save-status').textContent = error.message; }
+  });
+  const success = document.createElement('select');
+  for (const [value, label] of [['unknown','子任务结果未知'],['true','子任务成功'],['false','子任务失败']]) { const option = textElement('option', label); option.value = value; success.appendChild(option); }
+  success.value = attempt.subtask_success === null ? 'unknown' : String(attempt.subtask_success); record.subtask_success = success;
+  const notes = document.createElement('textarea'); notes.value = attempt.notes; notes.placeholder = '尝试备注'; record.notes = notes;
+  const remove = textElement('button', '删除尝试'); remove.type = 'button';
+  remove.addEventListener('click', () => { attemptRows.splice(attemptRows.indexOf(record), 1); row.remove(); });
+  row.append(success, notes, remove); attemptRows.push(record); $('object-attempts').appendChild(row);
+}
+function readAttemptFrames(row) {
+  const result = {}; let previous = null;
+  for (const field of attemptFrameFields) {
+    const value = String(row[field].value).trim();
+    if (!value) { result[field] = null; continue; }
+    const number = Number(value);
+    const frame = row.units.value === 'frame' ? frames[number] : frames.find(frame => frame.action_step === number);
+    if (!Number.isInteger(number) || number < (row.units.value === 'frame' ? 0 : 1) || !frame) throw Error('尝试步骤必须是可用的整数；Action Step 从1开始。');
+    if (previous !== null && frame.index < previous) throw Error('尝试起止及抓放边界必须按时间先后排列。');
+    if (!['start_frame','end_frame'].includes(field) && frame.context.phase === 'settling') throw Error('settling 帧不能标注抓放。');
+    result[field] = frame.index; previous = frame.index;
+  }
+  return result;
+}
+function readAttempt(row) {
+  const success = row.subtask_success.value;
+  if (!['unknown','true','false'].includes(success)) throw Error('请选择有效的子任务结果。');
+  return {attempt_id: row.attempt_id, object: String(row.object.value).trim() || null,
+    ...readAttemptFrames(row), subtask_success: success === 'unknown' ? null : success === 'true',
+    source: row.source, notes: String(row.notes.value)};
+}
+function stopPlayback() { playing = false; playbackGeneration++; $('play-pause').textContent = '连续播放'; }
+function playbackTick(generation) {
+  const fps = Number($('play-fps').value);
+  if (!Number.isFinite(fps) || fps < 1 || fps > 60) { stopPlayback(); $('save-status').textContent = '播放 fps 必须为1到60。'; return; }
+  setTimeout(() => {
+    if (!playing || generation !== playbackGeneration) return;
+    if (currentFrame >= frames.length - 1) { stopPlayback(); return; }
+    navigate(currentFrame + 1);
+    if (currentFrame >= frames.length - 1) stopPlayback(); else playbackTick(generation);
+  }, 1000 / fps);
+}
+$('play-pause').addEventListener('click', () => {
+  if (playing) { stopPlayback(); return; }
+  if (!frames.length) return;
+  if (currentFrame === frames.length - 1) navigate(0);
+  playing = true; $('play-pause').textContent = '暂停'; playbackTick(++playbackGeneration);
+});
+$('action-number').addEventListener('change', event => {
+  const frame = frames.find(frame => frame.action_step === Number(event.target.value));
+  if (frame) navigate(frame.index); else $('save-status').textContent = '该 Action Step 不可用。';
+});
+$('add-attempt').addEventListener('click', () => {
+  let index = attemptRows.length + 1;
+  while (attemptRows.some(row => row.attempt_id === 'attempt-' + String(index).padStart(3,'0'))) index++;
+  const frame = frames[currentFrame];
+  addAttempt({attempt_id: 'attempt-' + String(index).padStart(3,'0'), object: null,
+    start_frame: frame && frame.context.phase === 'policy' ? currentFrame : null,
+    end_frame: null, grasp_start_frame: null, grasp_frame: null,
+    place_start_frame: null, place_frame: null, subtask_success: null, source: 'human_review', notes: ''});
+});
 $('previous').addEventListener('click', () => navigate(currentFrame - 1));
 $('next').addEventListener('click', () => navigate(currentFrame + 1));
 $('frame-slider').addEventListener('input', event => navigate(event.target.value));
@@ -278,11 +395,13 @@ $('download').addEventListener('click', () => {
 $('episode-heading').textContent = `${data.manifest.episode_id} · ${frames.length} 帧 · 录制状态 ${data.manifest.status} · 原始结果 ${data.manifest.outcome}`;
 $('manifest').textContent = pretty(data.manifest);
 $('frame-slider').max = String(Math.max(0, frames.length - 1)); $('frame-number').max = $('frame-slider').max;
-for (const id of ['frame-slider', 'frame-number', 'show-after', 'add-segment']) $(id).disabled = !frames.length;
+for (const id of ['frame-slider', 'frame-number', 'show-after', 'add-segment', 'play-pause', 'action-number']) $(id).disabled = !frames.length;
 $('outcome').value = original.outcome; $('episode-notes').value = original.notes;
 $('revision').textContent = `本页基于标注修订号 ${original.revision}。若其他审阅已保存，请重新导出页面，避免覆盖新修订。`;
 $('import-command').textContent = 'vla-trace import <episode目录> <下载的JSON文件>';
 for (const segment of original.segments) addSegment(segment);
+$('object-reviewed').checked = original.object_reviewed;
+for (const attempt of original.object_attempts) addAttempt(attempt);
 renderFrame();
 </script>
 </body></html>

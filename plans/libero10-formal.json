@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "task_name": "LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket",
+  "stage": "formal",
+  "task_suite_name": "libero_10",
+  "init_state_indices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19
+  ],
+  "object_pair": [
+    "alphabet_soup_1",
+    "tomato_sauce_1"
+  ],
+  "plan_hash": "6ac52f0586aca085a623bd9d945a0a599738067b77d2635a9b68c6acd2a549fb"
+}

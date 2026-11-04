@@ -1,5 +1,7 @@
 # OpenVLA-OFT + LIBERO trajectory tools
 
+> 历史记录（2026-11-03）：下文保留当时的上下文，不代表当前状态。私有原文已于 2026-11-04 完整读取；当前要求以 [原文对齐设计](2026-11-04-libero-long-requirements-design.md) 和 [验收矩阵](../../REQUIREMENTS_TRACEABILITY.md) 为准。
+
 User confirmed OpenVLA-OFT with LIBERO on one A100. The original private proposal is not readable in this session; this implementation is based on that confirmed environment, not claimed to reproduce the inaccessible proposal. No A100 connection is available. The tools do not upgrade model dependencies or edit OFT sources; delegated upstream evaluation retains its own checkpoint initialization side effects.
 
 ## Deliverable and decisions

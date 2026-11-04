@@ -17,8 +17,12 @@ from typing import Any
 
 SOURCE = "libero_predicates"
 _FIELDS = {"schema_version", "episode_id", "num_steps", "source", "events",
-           "segments", "outcome", "notes", "revision"}
+           "segments", "outcome", "notes", "revision", "object_attempts", "object_reviewed"}
 _IMMUTABLE = ("schema_version", "episode_id", "num_steps", "source", "events")
+_ATTEMPT_FRAMES = ("start_frame", "grasp_start_frame", "grasp_frame",
+                   "place_start_frame", "place_frame", "end_frame")
+_OPERATION_STARTS = {"grasp_start_frame", "place_start_frame"}
+_ATTEMPT_FIELDS = set(_ATTEMPT_FRAMES) | {"attempt_id", "object", "subtask_success", "source", "notes"}
 
 
 def _predicate_snapshot(context: dict, name: str) -> dict:
@@ -87,10 +91,10 @@ def _generate_annotations(
             events.append({"frame": frame, "predicate": predicate, "value": value,
                            "kind": kind, "source": source})
             previous[predicate] = value
-    return {"schema_version": 1, "episode_id": manifest["episode_id"],
+    return {"schema_version": 2, "episode_id": manifest["episode_id"],
             "num_steps": len(steps), "source": source, "events": events,
             "segments": [], "outcome": manifest["outcome"], "notes": "",
-            "revision": 0}
+            "revision": 0, "object_attempts": [], "object_reviewed": False}
 
 
 def _nonnegative_integer(value: Any, name: str) -> None:
@@ -98,7 +102,29 @@ def _nonnegative_integer(value: Any, name: str) -> None:
         raise ValueError(f"{name} must be a nonnegative integer")
 
 
-def _validate_document(document: dict[str, Any], evidence: dict[str, Any]) -> None:
+def _migrate(document: dict[str, Any]) -> dict[str, Any]:
+    """Copy legacy documents in memory; never silently repair malformed v2."""
+    if not isinstance(document, dict):
+        raise ValueError("annotation document must be an object")
+    document = copy.deepcopy(document)
+    version = document.get("schema_version")
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError("unsupported annotation schema_version")
+    if version == 1:
+        if {"object_attempts", "object_reviewed"} & document.keys():
+            raise ValueError("v1 annotation document cannot contain v2 object fields")
+        document.update(schema_version=2, object_attempts=[], object_reviewed=False)
+    attempts = document.get("object_attempts")
+    if isinstance(attempts, list):
+        for attempt in attempts:
+            if isinstance(attempt, dict):
+                for field in _OPERATION_STARTS:
+                    attempt.setdefault(field, None)
+    return document
+
+
+def _validate_document(document: dict[str, Any], evidence: dict[str, Any],
+                       phases: list[str | None]) -> None:
     if not isinstance(document, dict):
         raise ValueError("annotation document must be an object")
     if not _FIELDS <= document.keys() or document.keys() - _FIELDS - {"base_revision"}:
@@ -134,6 +160,48 @@ def _validate_document(document: dict[str, Any], evidence: dict[str, Any]) -> No
             raise ValueError("segment label must be a nonempty string")
         if not isinstance(segment["notes"], str):
             raise ValueError("segment notes must be a string")
+    if type(document["object_reviewed"]) is not bool:
+        raise ValueError("object_reviewed must be boolean")
+    if not isinstance(document["object_attempts"], list):
+        raise ValueError("object_attempts must be a list")
+    ids = set()
+    for attempt in document["object_attempts"]:
+        if not isinstance(attempt, dict) or set(attempt) != _ATTEMPT_FIELDS:
+            raise ValueError("object attempt has missing or unexpected fields")
+        for field in ("attempt_id", "source"):
+            if not isinstance(attempt[field], str) or not attempt[field].strip():
+                raise ValueError(f"attempt {field} must be a nonempty string")
+        if attempt["attempt_id"] in ids:
+            raise ValueError("attempt_id must be unique within the episode")
+        ids.add(attempt["attempt_id"])
+        if attempt["object"] is not None and (not isinstance(attempt["object"], str)
+                                                or not attempt["object"].strip()):
+            raise ValueError("attempt object must be a nonempty string or null")
+        if attempt["subtask_success"] is not None and type(attempt["subtask_success"]) is not bool:
+            raise ValueError("attempt subtask_success must be boolean or null")
+        if not isinstance(attempt["notes"], str):
+            raise ValueError("attempt notes must be a string")
+        previous = None
+        for field in _ATTEMPT_FRAMES:
+            frame = attempt[field]
+            if frame is None:
+                continue
+            _nonnegative_integer(frame, f"attempt {field}")
+            if frame >= evidence["num_steps"]:
+                raise ValueError("attempt frame is outside the episode")
+            if previous is not None and frame < previous:
+                raise ValueError("attempt frame boundaries must be in chronological order")
+            previous = frame
+            if field not in ("start_frame", "end_frame") and phases[frame] == "settling":
+                raise ValueError("attempt grasp/place events cannot reference settling frames")
+
+
+def _phases(path: Path, evidence: dict[str, Any]) -> list[str | None]:
+    from .recorder import read_steps
+    steps = read_steps(path)
+    if len(steps) != evidence["num_steps"]:
+        raise ValueError("Episode changed while reading annotation evidence")
+    return [step.get("context", {}).get("phase") for step in steps]
 
 
 def _reject_constant(value: str) -> None:
@@ -146,7 +214,8 @@ def _load_existing(path: Path, evidence: dict[str, Any]) -> dict[str, Any]:
             document = json.load(stream, parse_constant=_reject_constant)
     except FileNotFoundError:
         return copy.deepcopy(evidence)
-    _validate_document(document, evidence)
+    document = _migrate(document)
+    _validate_document(document, evidence, _phases(path, evidence))
     if "base_revision" in document:
         raise ValueError("saved annotations must not contain base_revision")
     return document
@@ -166,7 +235,7 @@ def save_annotations(
     """Atomically save human fields and return the incremented document.
 
     Only terminal episodes can be saved; recording episodes may be previewed.
-    Only segments, outcome and notes are editable. Automatic evidence is checked
+    Only segments, object attempts/review status, outcome and notes are editable. Automatic evidence is checked
     against committed steps and copied from that trusted source. A process-wide
     exclusive file lock serializes revision checks and replacement. An abandoned
     lock is never reclaimed automatically: after a crashed writer, verify that no
@@ -183,8 +252,13 @@ def save_annotations(
         with os.fdopen(lock_fd, "w", encoding="ascii") as stream:
             stream.write(str(os.getpid()))
         evidence = _generate_annotations(path, require_terminal=True)
-        _validate_document(document, evidence)
         current = _load_existing(path, evidence)
+        legacy_import = isinstance(document, dict) and document.get("schema_version") == 1
+        document = _migrate(document)
+        if legacy_import:
+            for field in ("object_attempts", "object_reviewed"):
+                document[field] = copy.deepcopy(current[field])
+        _validate_document(document, evidence, _phases(path, evidence))
         supplied_revision = document.get("base_revision", document["revision"])
         if expected_revision is None:
             expected_revision = supplied_revision
@@ -195,7 +269,7 @@ def save_annotations(
                 f"current {current['revision']}, document {supplied_revision}"
             )
         saved = copy.deepcopy(evidence)
-        for field in ("segments", "outcome", "notes"):
+        for field in ("segments", "outcome", "notes", "object_attempts", "object_reviewed"):
             saved[field] = copy.deepcopy(document[field])
         saved["revision"] = current["revision"] + 1
         with tempfile.NamedTemporaryFile(

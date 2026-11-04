@@ -174,11 +174,12 @@ class Element {
 const elements = Object.fromEntries(input.ids.map(id => [id, new Element()]));
 elements['review-data'].textContent = JSON.stringify(input.data);
 let blob = null;
+const timerCallbacks = [];
 const sandbox = {
  document: {getElementById: id => {if (!elements[id]) throw Error('Unknown id ' + id); return elements[id];},
    createElement: () => new Element(), body: new Element()},
  Blob, URL: {createObjectURL: b => {blob = b; return 'blob:local';}, revokeObjectURL: () => {}},
- setTimeout: () => 1,
+ timerCallbacks, setTimeout: callback => {timerCallbacks.push(callback); return timerCallbacks.length;},
 };
 vm.createContext(sandbox);
 vm.runInContext(input.program, sandbox);
@@ -261,6 +262,44 @@ def test_export_cannot_overwrite_original_episode_files(tmp_path, relative):
     assert destination.read_bytes() == original
 
 
+@pytest.mark.parametrize("relative,original", [
+    ("execution.json", b'{"executed_policy_steps": 7}\r\n'),
+    ("videos/task-init-episode.mp4", b"\x00\x00\x00\x18ftypmp42\x00original-video"),
+    ("videos/task-init-episode.json", b'{"frames": [{"record_step": 0}]}\n'),
+    ("notes.txt", b"original non-HTML evidence\r\n"),
+])
+def test_review_rejects_non_html_evidence_without_changing_its_bytes(tmp_path, relative, original):
+    from vla_trajectory.review import export_review
+
+    path = episode(tmp_path, images=False)
+    destination = path / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(original)
+    with pytest.raises(ValueError, match="HTML|html"):
+        export_review(path, destination)
+    assert destination.read_bytes() == original
+    assert not list(destination.parent.glob(".review-*.tmp"))
+
+
+@pytest.mark.parametrize("suffix", [".html", ".htm", ".HTML", ".HtM"])
+def test_review_allows_html_export_and_refresh_with_case_insensitive_suffix(tmp_path, suffix):
+    from vla_trajectory.annotations import load_annotations, save_annotations
+    from vla_trajectory.review import export_review
+
+    path = episode(tmp_path, images=False)
+    destination = tmp_path / "exports" / ("review" + suffix)
+    assert export_review(path, destination) == destination
+    original = destination.read_bytes()
+    assert original.startswith(b"<!doctype html>")
+    annotation = load_annotations(path)
+    annotation["notes"] = "Updated HTML review"
+    save_annotations(path, annotation)
+    assert export_review(path, destination) == destination
+    updated = destination.read_bytes()
+    assert updated != original
+    assert ExportParser(updated.decode("utf-8")).payload["annotations"]["notes"] == annotation["notes"]
+
+
 def test_review_script_navigation_updates_the_selected_transition(tmp_path):
     from vla_trajectory.recorder import EpisodeRecorder
 
@@ -312,3 +351,119 @@ def test_export_rejects_episode_that_changes_during_snapshot(tmp_path, monkeypat
     with pytest.raises(ValueError, match="changed|snapshot"):
         review.export_review(recorder.path, output)
     assert not output.exists()
+
+
+def attempt_episode(tmp_path):
+    from vla_trajectory.recorder import EpisodeRecorder
+    recorder = EpisodeRecorder(tmp_path / "episodes", {}, episode_id="attempt-review")
+    for index in range(7):
+        recorder.append({}, np.array([index]), {},
+                        context={"phase": "settling" if index == 0 else "policy"})
+    recorder.finish(outcome="success")
+    return recorder.path
+
+
+def test_review_v2_maps_action_steps_and_downloads_attempts_for_real_import(tmp_path):
+    from vla_trajectory.annotations import save_annotations, load_annotations
+    path = attempt_episode(tmp_path)
+    parsed = export(path, tmp_path)
+    assert [frame["action_step"] for frame in parsed.payload["frames"]] == [None, 1, 2, 3, 4, 5, 6]
+    result = run_review_script(parsed, r'''
+navigate(1);
+document.getElementById('add-attempt').click();
+attemptRows[0].object.value = '汤罐';
+attemptRows[0].start_frame.value = '1';
+attemptRows[0].grasp_start_frame.value = '1';
+navigate(2); attemptRows[0].setButtons.grasp_frame.click();
+attemptRows[0].place_start_frame.value = '4';
+navigate(5); attemptRows[0].setButtons.place_frame.click();
+attemptRows[0].end_frame.value = '6';
+attemptRows[0].subtask_success.value = 'false';
+document.getElementById('add-attempt').click();
+attemptRows[1].object.value = '汤罐';
+attemptRows[1].start_frame.value = '';
+attemptRows[1].end_frame.value = '';
+document.getElementById('object-reviewed').checked = true;
+document.getElementById('download').click();
+''')
+    downloaded = result["downloaded"]
+    assert downloaded["schema_version"] == 2 and downloaded["object_reviewed"] is True
+    first, second = downloaded["object_attempts"]
+    assert first["object"] == second["object"] == "汤罐"
+    assert [first[field] for field in ("start_frame", "grasp_start_frame", "grasp_frame",
+                                     "place_start_frame", "place_frame", "end_frame")] == [1, 1, 2, 4, 5, 6]
+    assert first["subtask_success"] is False and second["subtask_success"] is None
+    assert first["attempt_id"] != second["attempt_id"]
+    assert "Action Step 5" in result["frame"]
+    assert downloaded["events"] == parsed.payload["annotations"]["events"]
+    saved = save_annotations(path, downloaded)
+    assert load_annotations(path) == saved
+
+
+def test_review_attempt_rejects_invalid_action_step_and_can_mark_empty_review_complete(tmp_path):
+    parsed = export(attempt_episode(tmp_path), tmp_path)
+    result = run_review_script(parsed, r'''
+document.getElementById('add-attempt').click();
+attemptRows[0].grasp_frame.value = '0';
+document.getElementById('download').click();
+''')
+    assert result["downloaded"] is None and result["error"]
+    result = run_review_script(parsed, r'''
+document.getElementById('object-reviewed').checked = true;
+document.getElementById('download').click();
+''')
+    assert result["downloaded"]["object_attempts"] == []
+    assert result["downloaded"]["object_reviewed"] is True
+
+
+def test_review_continuous_playback_advances_and_pause_stops_pending_timer(tmp_path):
+    parsed = export(attempt_episode(tmp_path), tmp_path)
+    result = run_review_script(parsed, r'''
+document.getElementById('play-fps').value = '10';
+document.getElementById('play-pause').click();
+timerCallbacks.shift()();
+if (currentFrame !== 1) throw Error('Playback did not advance');
+document.getElementById('play-pause').click();
+timerCallbacks.shift()();
+if (currentFrame !== 1) throw Error('Pause did not stop playback');
+''')
+    assert "Action Step 1" in result["frame"]
+
+
+def test_review_unknown_phase_blocks_later_action_numbering_and_preserves_raw_attempt(tmp_path):
+    from vla_trajectory.recorder import EpisodeRecorder
+    from vla_trajectory.annotations import load_annotations, save_annotations
+    recorder = EpisodeRecorder(tmp_path / "episodes", {}, episode_id="unknown-phase")
+    for phase in ("policy", None, "policy"):
+        recorder.append({}, np.array([0]), {}, context={} if phase is None else {"phase": phase})
+    recorder.finish()
+    annotation = load_annotations(recorder.path)
+    annotation["object_attempts"] = [{"attempt_id": "old-attempt", "object": None,
+        "start_frame": None, "end_frame": None, "grasp_start_frame": None,
+        "grasp_frame": 2, "place_start_frame": None, "place_frame": None,
+        "subtask_success": None, "source": "human_review", "notes": "旧记录"}]
+    save_annotations(recorder.path, annotation)
+    parsed = export(recorder.path, tmp_path)
+    assert [frame["action_step"] for frame in parsed.payload["frames"]] == [1, None, None]
+    result = run_review_script(parsed, r'''
+if (attemptRows[0].units.value !== 'frame') throw Error('Unknown mapping must use raw frame');
+navigate(2);
+document.getElementById('download').click();
+''')
+    assert result["downloaded"]["object_attempts"] == annotation["object_attempts"]
+    assert "Action Step 未知" in result["frame"]
+
+
+def test_review_raw_settling_grasp_and_reversed_operation_boundaries_are_rejected(tmp_path):
+    parsed = export(attempt_episode(tmp_path), tmp_path)
+    for scenario in (r'''
+document.getElementById('add-attempt').click();
+attemptRows[0].units.value = 'frame';
+attemptRows[0].grasp_frame.value = '0';
+''', r'''
+document.getElementById('add-attempt').click();
+attemptRows[0].grasp_start_frame.value = '3';
+attemptRows[0].grasp_frame.value = '2';
+'''):
+        result = run_review_script(parsed, scenario + "document.getElementById('download').click();")
+        assert result["downloaded"] is None and result["error"]
