@@ -1,4 +1,16 @@
-# 交付与验证记录 · 2026-11-04
+# 交付与验证记录 · 2026-11-05
+
+## 本次操作说明更新
+
+用户已讨论确认先运行 LIBERO-10 的 Soup + Tomato → Basket 双物体任务，五次试采核验后，再做二十个不同初态的正式采集。OFT 工程根目录已明确为 `/HUBU-AI096/lgm/ICASSP/peft-in-openvla`。
+
+本次更新 README、[A100 详细操作手册](A100_ACCEPTANCE.md) 和同源 [离线 HTML 手册](A100_RUNBOOK.html)。HTML 下载后用浏览器打开，需要手动替换的 `REPLACE_WITH_*` 值直接显示为蓝色；已知工程根目录已填好。文档补充安装位置、新终端恢复变量、单任务计划采集、逐回合检查、审阅页和标注 JSON 的下载/上传/import、正式阶段与分析产物。
+
+本次为文档更新，运行代码和 wheel 保持 0.2.0；源码 ZIP 同步本轮正式文档。文档命令的本地检查与服务器实际运行分别记录。用户已提供目录，但当前尚无可用的服务器会话，真实 A100 实验仍由用户接入后执行。
+
+2026-11-05 本地核对：现有 CLI 测试 9 passed（2.93s，退出码 0）；24 个运行代码/测试/脚本/pyproject 文件与 0.2.0 发布时的 Git blob SHA 一致。Markdown 与 HTML 的 20 个代码块逐字一致；4 段内嵌 Python 编译通过，8 个 CLI 子命令帮助核对通过，实际 `plan` 命令分别生成 5/20 个指定初态索引，8 个本地文档链接检查通过。HTML 中四类手动替换值均经 DOM/CSS 静态检查显示为蓝色标记。激活、安装、采集和导入的命令序列采用失败即停保护，并持久保存本轮变量/严格模式供新终端恢复。
+
+本机没有 Bash，未运行 `bash -n` 或服务器上的实际 Bash 命令；上述核对不是 A100 权重/仿真/视频/人工标注实验验收。
 
 ## 当前版本与来源
 
@@ -38,7 +50,8 @@ CI 安装 `.[test,analysis,video]` 并运行全量测试，包含真实 MP4 编�
 仓库：[lianggeming14/openvla](https://github.com/lianggeming14/openvla)，保留用户已创建的公开设置。
 
 - **首次 0.1.0 发布已读回核验**：main commit `3be25265c3c9a09ea05b24c06a50d90169b9c74d`，26 个远程文件 Git blob SHA 与本地逐项一致，包含 24 个源码/测试/脚本/文档及 downloads 下两个发行包。
-- **本轮 0.2.0 交付范围**：36 个源码/测试/脚本/正式文档与计划模板文件，以及 `downloads/` 中的源码 ZIP 和新 wheel；新增实现不属于上述旧 commit，当前版本以 [main 提交历史](https://github.com/lianggeming14/openvla/commits/main) 为准。
+- **0.2.0 代码发布已核验**：commit `e1b3770b924c0efef0c2d9b014ebc86478880e76`，36 个源码/测试/脚本/正式文档和计划模板文件；该提交的 [CI run 41839093680](https://github.com/lianggeming14/openvla/actions/runs/41839093680) 在 Python 3.10、3.12 上各 231 passed，包含实际 MP4 编码/解码，无 skip。两条 Linux 中文字体警告不影响默认英文对象 ID。
+- **2026-11-05 操作说明**：在上述代码版本上更新正式手册及源码 ZIP，不替换运行 wheel。发布后以 [main 提交历史](https://github.com/lianggeming14/openvla/commits/main) 查看本次文档提交。
 - 新 wheel 为 `openvla_trajectory_tools-0.2.0-py3-none-any.whl`；旧 `0.1.0` wheel 保留为历史文件。源码 ZIP 为 `openvla-source.zip`，保留 `openvla/` 包装目录，包含新模块和 `plans/`。
 - 本地 `.git` 元数据只读；远程提交通过已授权的 GitHub 连接器完成。发布流程逐项核对远程 Git blob SHA 与本地内容，分支提交和 CI 结果分别读回确认。
 
@@ -46,6 +59,6 @@ CI 安装 `.[test,analysis,video]` 并运行全量测试，包含真实 MP4 编�
 
 ## 仍待实机与渠道验收
 
-真实 A100 的权重加载、渲染、五次试采、二十个不同初态正式评测、逐回合视频/人工复核、真实三表/图/报告和行为结论均未执行。当前缺 SSH 主机与 OFT/数据目录连接；操作见 [A100 清单](A100_ACCEPTANCE.md)。没有实验数据时不填造成功率或顺序偏好。
+真实 A100 的权重加载、渲染、五次试采、二十个不同初态正式评测、逐回合视频/人工复核、真实三表/图/报告和行为结论均未执行。OFT 工程路径已知，仍缺可用的 SSH 主机/服务器连接；操作见 [A100 详细手册](A100_ACCEPTANCE.md)。没有实验数据时不填造成功率或顺序偏好。
 
 飞书文档发送仍缺可用工具/认证及明确接收位置，尚未发送。后续 GitHub 要求没有撤销飞书交付；连接恢复后继续。本文不代表已部署后台同步或定时服务。

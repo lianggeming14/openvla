@@ -42,4 +42,4 @@ EEF 长度为每个 policy transition 的前后坐标差之和，包含第一个
 
 分组、完整测试及安装包验证记录见 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)。本轮最终完整本地测试为 230 passed、1 skipped，独立审查与修复复审通过；真实编码本地缺依赖明确 skip。已安装编码器的 CI 运行状态以 [当前提交的 Actions](https://github.com/lianggeming14/openvla/actions) 为准，配置本身不被当作成功结果。
 
-无 A100 SSH/目录连接，未产生真实 5+20 回合、原始数据、完整视频、人工标签或真实模型分析结论。飞书缺可用发送认证与明确接收位置，未发送。后续按 [A100 清单](A100_ACCEPTANCE.md) 完成实机验收，不用 synthetic 或先前版本的发布结果代替。
+用户已提供 OFT 根目录 `/HUBU-AI096/lgm/ICASSP/peft-in-openvla`，尚无可用的 A100 服务器会话，未产生真实 5+20 回合、原始数据、完整视频、人工标签或真实模型分析结论。按 [A100 详细操作手册](A100_ACCEPTANCE.md) 执行；需要手动替换的值可在 [离线 HTML 手册](A100_RUNBOOK.html) 下载打开后查看蓝色标记。飞书缺可用发送认证与明确接收位置，未发送。不用 synthetic 或先前版本的发布结果代替实机验收。
