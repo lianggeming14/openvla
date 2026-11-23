@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from functools import wraps
+import hashlib
 import inspect
 from pathlib import Path
 import time
@@ -152,6 +153,8 @@ class _Proxy:
                 if state.get('raw_action') is not None:
                     extra['raw_action'] = state['raw_action']
                 if state['query_pending']:
+                    context.update(instruction=state['query_instruction'],
+                                   instruction_sha256=state['query_instruction_sha256'])
                     extra['query_actions'] = state['query_actions']
                     for key, value in state['query_observation'].items():
                         extra['policy_' + key] = value
@@ -175,12 +178,18 @@ class _Proxy:
 
 
 @contextmanager
-def instrument(module, output_root, *, run_metadata=None, collection_plan=None):
+def instrument(module, output_root, *, run_metadata=None, collection_plan=None,
+               instruction_override=None, row_filter=None):
     """Wrap supported OFT functions for the lifetime of this context only.
 
     OFT's episode loop catches ordinary exceptions. Those errors are retained
     explicitly; recording failures are raised again after that loop returns.
     """
+    if instruction_override is not None and (
+            not isinstance(instruction_override, str) or not instruction_override.strip()):
+        raise ValueError('instruction_override must be a nonblank string or None')
+    if row_filter is not None and not callable(row_filter):
+        raise ValueError('row_filter must be callable or None')
     required = ('run_episode', 'get_action', 'process_action', 'log_message')
     for name in required:
         if not callable(getattr(module, name, None)):
@@ -192,6 +201,20 @@ def instrument(module, output_root, *, run_metadata=None, collection_plan=None):
     if getattr(module, '_vla_trace_active', False):
         raise ValueError('OFT instrumentation is already active')
     original = {name: getattr(module, name) for name in required}
+    try:
+        action_signature = inspect.signature(original['get_action'])
+    except (TypeError, ValueError):
+        action_signature = None
+    instruction_parameter_name = None
+    if action_signature is not None:
+        for name in ('task_description', 'task_label'):
+            parameter = action_signature.parameters.get(name)
+            if parameter is not None and parameter.kind not in (
+                    inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                instruction_parameter_name = name
+                break
+    if instruction_override is not None and instruction_parameter_name is None:
+        raise ValueError('Unsupported get_action signature: explicit task_description or task_label required for instruction_override')
     active = [None]
     plan = None if collection_plan is None else validate_plan(collection_plan)
     resolved = [None]
@@ -245,6 +268,8 @@ def instrument(module, output_root, *, run_metadata=None, collection_plan=None):
             return bound.arguments['total_episodes'], bound.arguments['total_successes']
         totals = bound.arguments['total_episodes'], bound.arguments['total_successes']
         for row, initial_state in zip(resolved[0]['rows'], selected_states[0]):
+            if row_filter is not None and not row_filter(cfg, dict(row)):
+                continue
             bound.arguments['task_suite'] = SelectedStateSuite(suite, task_id, initial_state.copy())
             bound.arguments['total_episodes'], bound.arguments['total_successes'] = totals
             row_metadata[0] = row
@@ -286,22 +311,65 @@ def instrument(module, output_root, *, run_metadata=None, collection_plan=None):
         state = active[0]
         if state is None:
             return original['get_action'](*args, **kwargs)
+        query = None
         try:
-            observation = kwargs.get('observation', args[2] if len(args) > 2 else None)
+            # Binding preserves positional, reordered and keyword-only calls.
+            # Older opaque callables remain usable without an override.
+            arguments = {}
+            if action_signature is not None:
+                action_bound = action_signature.bind(*args, **kwargs)
+                action_bound.apply_defaults()
+                arguments = action_bound.arguments
+            observation = arguments.get('observation', arguments.get('obs', kwargs.get(
+                'observation', kwargs.get('obs', args[2] if len(args) > 2 else None))))
+            instruction = arguments.get(instruction_parameter_name, kwargs.get(
+                'task_description', kwargs.get('task_label', args[3] if len(args) > 3 else None)))
+            if instruction is not None and (
+                    not isinstance(instruction, str) or not instruction.strip()):
+                state['instruction_error'] = ValueError('Model query instruction must be a nonblank string')
+                raise state['instruction_error']
+            instruction_hash = (None if instruction is None else
+                                hashlib.sha256(instruction.encode('utf-8')).hexdigest())
+            state['chunk_id'] += 1
+            query = {'chunk_id': state['chunk_id'], 'instruction': instruction,
+                     'instruction_sha256': instruction_hash, 'status': 'pending', 'error': None}
+            state['queries']['queries'].append(query)
+            write_queries(state)
+            if instruction_override is not None and instruction != state['metadata']['task_description']:
+                state['instruction_error'] = ValueError('Model query instruction differs from the episode instruction')
+                raise state['instruction_error']
             copied = _copy_observation(observation)
             start = time.perf_counter_ns()
             actions = original['get_action'](*args, **kwargs)
             # Official OFT extends a bounded deque; excess leading rows are
             # discarded. Keep indices relative to the full model prediction.
-            cfg = kwargs.get('cfg', args[0] if args else None)
+            cfg = arguments.get('cfg', kwargs.get('cfg', args[0] if args else None))
             capacity = getattr(cfg, 'num_open_loop_steps', len(actions))
             offset = max(0, len(actions) - capacity)
-            state.update(chunk_id=state['chunk_id'] + 1, chunk_index=offset,
+            state.update(chunk_index=offset,
                 query_pending=True, query_actions=np.asarray(actions).copy(),
-                query_observation=copied, inference_ms=(time.perf_counter_ns() - start) / 1e6)
+                query_observation=copied, inference_ms=(time.perf_counter_ns() - start) / 1e6,
+                query_instruction=instruction, query_instruction_sha256=instruction_hash)
+            query.update(status='complete')
+            write_queries(state)
             return actions
         except BaseException as exc:
             state['error'] = f'{type(exc).__name__}: {exc}'
+            if query is not None:
+                query.update(status='error', error=state['error'])
+                try:
+                    write_queries(state)
+                except Exception:
+                    # The retained recording error is raised after upstream's
+                    # catch, without replacing an active interrupt/exception.
+                    pass
+            raise
+
+    def write_queries(state):
+        try:
+            _write_json(state['recorder'].path / 'queries.json', state['queries'])
+        except Exception as exc:
+            state['query_recording_error'] = exc
             raise
 
     @wraps(original['process_action'])
@@ -329,6 +397,11 @@ def instrument(module, output_root, *, run_metadata=None, collection_plan=None):
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
         cfg, env = bound.arguments['cfg'], bound.arguments['env']
+        original_description = bound.arguments['task_description']
+        if not isinstance(original_description, str) or not original_description.strip():
+            raise ValueError('task_description must be a nonblank string')
+        effective_instruction = original_description if instruction_override is None else instruction_override
+        bound.arguments['task_description'] = effective_instruction
         if plan is not None and row_metadata[0] is None:
             raise ValueError('collection episodes must be invoked through run_task')
         if plan is not None:
@@ -337,7 +410,11 @@ def instrument(module, output_root, *, run_metadata=None, collection_plan=None):
         metadata.update(row_metadata[0] or {})
         frequency = getattr(env, 'control_freq', getattr(getattr(env, 'env', None), 'control_freq', None))
         metadata['control_freq'] = None if frequency is None else float(frequency)
-        metadata.update(config=_config(cfg), task_description=bound.arguments['task_description'],
+        metadata.update(config=_config(cfg), task_description=effective_instruction,
+            original_task_description=original_description,
+            original_task_description_sha256=hashlib.sha256(original_description.encode('utf-8')).hexdigest(),
+            instruction_sha256=hashlib.sha256(effective_instruction.encode('utf-8')).hexdigest(),
+            instruction_override=instruction_override is not None,
             recorder=f'openvla-trajectory-tools/{__version__}', raw_image_orientation='libero_unmodified',
             bddl_file=str(getattr(env, 'bddl_file_name', getattr(getattr(env, 'env', None), 'bddl_file_name', ''))))
         supplied_initial = bound.arguments.get('initial_state')
@@ -346,6 +423,8 @@ def instrument(module, output_root, *, run_metadata=None, collection_plan=None):
         state = {'recorder': recorder, 'chunk_id': -1, 'chunk_index': 0,
             'query_pending': False, 'initial_state': bound.arguments.get('initial_state'),
             'error': None, 'recording_error': None, 'metadata': metadata,
+            'instruction_error': None, 'query_recording_error': None,
+            'queries': {'schema_version': 1, 'episode_id': recorder.manifest['episode_id'], 'queries': []},
             'executed_settling_steps': 0, 'executed_policy_steps': 0,
             'recorded_settling_steps': 0, 'recorded_policy_steps': 0,
             'step_count_complete': True, 'observation_fields': {}}
@@ -353,9 +432,14 @@ def instrument(module, output_root, *, run_metadata=None, collection_plan=None):
         bound.arguments['env'] = _Proxy(env, state, module, cfg)
         status = 'complete'
         try:
+            write_queries(state)
             result = original['run_episode'](*bound.args, **bound.kwargs)
             if state['recording_error'] is not None:
                 raise RuntimeError('Trajectory recording failed; aborting evaluation') from state['recording_error']
+            if state['query_recording_error'] is not None:
+                raise RuntimeError('Model query recording failed; aborting evaluation') from state['query_recording_error']
+            if state['instruction_error'] is not None:
+                raise RuntimeError('Model query instruction verification failed; aborting evaluation') from state['instruction_error']
             return result
         except (KeyboardInterrupt, SystemExit) as exc:
             status = 'interrupted'

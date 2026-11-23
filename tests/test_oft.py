@@ -1,4 +1,5 @@
 from types import ModuleType, SimpleNamespace
+import hashlib
 import json
 import numpy as np
 import pytest
@@ -508,4 +509,273 @@ def run_task(cfg, task_suite, task_id, model, resize_size, processor=None,
     assert Env.closed_count == before + 1
     assert m.get_libero_env is factory
     assert not list(tmp_path.glob('*/manifest.json'))
+
+
+def instruction_evaluator(*, keyword_query=False, query_text=None, inference_failure=False):
+    """Keep the real wrapper/storage boundary while replacing GPU inference."""
+    m = evaluator()
+    m.episode_instructions = []
+    m.model_instructions = []
+    m.pending_queries_seen = []
+    m.query_text = query_text
+    m.inference_failure = inference_failure
+    call = ('get_action(cfg=cfg, model=model, observation=obs, task_description=instruction)'
+            if keyword_query else 'get_action(cfg, model, obs, instruction)')
+    exec('''
+def get_action(cfg, model, observation, task_description, **kwargs):
+    model_instructions.append(task_description)
+    from pathlib import Path
+    import json
+    pending_queries_seen.append(json.loads(next(Path(output_root).glob('*/queries.json')).read_text(encoding='utf-8')))
+    if inference_failure:
+        raise RuntimeError('model unavailable')
+    return np.zeros((1, 7))
+def run_episode(cfg, env, task_description, model=None, initial_state=None):
+    episode_instructions.append(task_description)
+    obs = env.reset()
+    try:
+        env.step([0] * 7)
+        instruction = task_description if query_text is None else query_text
+        actions = QUERY_CALL
+        env.step(actions[0])
+    except Exception as exc:
+        log_message(f'Episode error: {exc}')
+    return False, []
+'''.replace('QUERY_CALL', call), m.__dict__)
+    return m
+
+
+@pytest.mark.parametrize('keyword_query', [False, True])
+def test_instruction_override_reaches_episode_and_model_with_query_evidence(tmp_path, keyword_query):
+    from vla_trajectory.oft import instrument
+    from vla_trajectory.recorder import read_manifest, read_steps
+    m = instruction_evaluator(keyword_query=keyword_query)
+    m.output_root = str(tmp_path)
+    originals = m.run_episode, m.get_action, m.process_action, m.log_message
+    prompt = 'First put cheese away; then move butter.'
+    digest = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+    with instrument(m, tmp_path, instruction_override=prompt):
+        m.run_episode(config(), Env(), 'original task')
+    assert m.episode_instructions == m.model_instructions == [prompt]
+    assert (m.run_episode, m.get_action, m.process_action, m.log_message) == originals
+    assert not hasattr(m, '_vla_trace_active')
+    ep = next(tmp_path.iterdir())
+    manifest = read_manifest(ep)
+    assert manifest['metadata']['task_description'] == prompt
+    assert manifest['metadata']['original_task_description'] == 'original task'
+    assert manifest['metadata']['original_task_description_sha256'] == hashlib.sha256(b'original task').hexdigest()
+    assert manifest['metadata']['instruction_sha256'] == digest
+    assert manifest['metadata']['instruction_override'] is True
+    evidence = json.loads((ep / 'queries.json').read_text(encoding='utf-8'))
+    assert evidence['schema_version'] == 1
+    assert evidence['episode_id'] == manifest['episode_id']
+    assert evidence['queries'] == [{'chunk_id': 0, 'instruction': prompt,
+        'instruction_sha256': digest, 'status': 'complete', 'error': None}]
+    assert m.pending_queries_seen[0]['queries'][0]['status'] == 'pending'
+    context = read_steps(ep)[1]['context']
+    assert context['instruction'] == prompt and context['instruction_sha256'] == digest
+    assert read_steps(ep)[0]['context'].get('instruction') is None
+
+
+def test_instruction_mismatch_is_not_hidden_by_upstream_exception_handler(tmp_path):
+    from vla_trajectory.oft import instrument
+    from vla_trajectory.recorder import read_manifest
+    m = instruction_evaluator(query_text='stale task text')
+    m.output_root = str(tmp_path)
+    original = m.run_episode
+    with pytest.raises(RuntimeError, match='instruction'):
+        with instrument(m, tmp_path, instruction_override='first cheese then butter'):
+            m.run_episode(config(), Env(), 'original task')
+    assert m.model_instructions == []
+    assert m.run_episode is original
+    ep = next(tmp_path.iterdir())
+    manifest = read_manifest(ep)
+    assert manifest['status'] == 'error' and manifest['outcome'] == 'unknown'
+    assert 'instruction' in manifest['error']
+    row = json.loads((ep / 'queries.json').read_text())['queries'][0]
+    assert row['instruction'] == 'stale task text'
+    assert row['instruction_sha256'] == hashlib.sha256(b'stale task text').hexdigest()
+    assert row['status'] == 'error' and 'instruction' in row['error']
+
+
+def test_failed_model_query_still_has_a_failed_query_record(tmp_path):
+    from vla_trajectory.oft import instrument
+    from vla_trajectory.recorder import read_manifest, read_steps
+    m = instruction_evaluator(inference_failure=True)
+    m.output_root = str(tmp_path)
+    with instrument(m, tmp_path, instruction_override='first A then B'):
+        m.run_episode(config(), Env(), 'original')
+    ep = next(tmp_path.iterdir())
+    assert read_manifest(ep)['status'] == 'error'
+    assert len(read_steps(ep)) == 1
+    row = json.loads((ep / 'queries.json').read_text())['queries'][0]
+    assert row['chunk_id'] == 0 and row['instruction'] == 'first A then B'
+    assert row['status'] == 'error' and 'model unavailable' in row['error']
+
+
+@pytest.mark.parametrize('value', ['', '  \t\n', 7, False])
+def test_invalid_instruction_override_rejected_before_writing(tmp_path, value):
+    from vla_trajectory.oft import instrument
+    m = evaluator()
+    original = m.run_episode
+    with pytest.raises(ValueError, match='instruction_override'):
+        with instrument(m, tmp_path, instruction_override=value):
+            m.run_episode(config(), Env(), 'original')
+    assert not list(tmp_path.iterdir())
+    assert m.run_episode is original and not hasattr(m, '_vla_trace_active')
+
+
+@pytest.mark.parametrize('value', ['', '  ', 7])
+def test_invalid_original_task_description_rejected_before_writing(tmp_path, value):
+    from vla_trajectory.oft import instrument
+    m = evaluator()
+    with pytest.raises(ValueError, match='task_description'):
+        with instrument(m, tmp_path, instruction_override='valid instruction'):
+            m.run_episode(config(), Env(), value)
+    assert not list(tmp_path.iterdir())
+
+
+def test_opaque_get_action_signature_only_rejected_when_override_needed(tmp_path):
+    from vla_trajectory.oft import instrument
+    from vla_trajectory.recorder import read_manifest
+    m = evaluator()
+    action = m.get_action
+    m.get_action = lambda *args, **kwargs: action(*args, **kwargs)
+    with pytest.raises(ValueError, match='get_action.*task_description'):
+        with instrument(m, tmp_path / 'override', instruction_override='first A then B'):
+            pass
+    assert not (tmp_path / 'override').exists()
+    with instrument(m, tmp_path / 'native'):
+        m.run_episode(config(), Env(), 'native instruction')
+    assert read_manifest(next((tmp_path / 'native').iterdir()))['status'] == 'complete'
+
+
+def test_query_storage_failure_is_not_swallowed_and_prevents_inference(tmp_path, monkeypatch):
+    from vla_trajectory import oft
+    from vla_trajectory.recorder import read_manifest
+    original_write = oft._write_json
+    def fail_query_write(path, document):
+        if path.name == 'queries.json' and document['queries']:
+            raise OSError('query storage full')
+        return original_write(path, document)
+    monkeypatch.setattr(oft, '_write_json', fail_query_write)
+    m = instruction_evaluator()
+    m.output_root = str(tmp_path)
+    with pytest.raises(RuntimeError, match='query recording'):
+        with oft.instrument(m, tmp_path, instruction_override='first A then B'):
+            m.run_episode(config(), Env(), 'original')
+    assert m.model_instructions == []
+    assert read_manifest(next(tmp_path.iterdir()))['status'] == 'error'
+
+
+@pytest.mark.parametrize('skipped', [set(range(5)), {0, 2, 4}])
+def test_collection_row_filter_skips_before_environment_creation(tmp_path, monkeypatch, skipped):
+    from vla_trajectory.collection import create_plan, DEFAULT_TASK_NAME
+    from vla_trajectory.oft import instrument
+    from vla_trajectory.recorder import read_manifest
+    from vla_trajectory import video
+    monkeypatch.setattr(video, 'export_episode_video', lambda path: path / 'complete.mp4')
+    m, cfg = task_evaluator(), plan_config()
+    created = []
+    factory = m.get_libero_env
+    def counted_factory(*args, **kwargs):
+        result = factory(*args, **kwargs)
+        created.append(result[0])
+        return result
+    m.get_libero_env = counted_factory
+    closed_before = Env.closed_count
+    seen_rows = []
+    def include_row(actual_cfg, row):
+        assert actual_cfg is cfg
+        seen_rows.append(row['init_state_index'])
+        include = row['init_state_index'] not in skipped
+        row['init_state_index'] = 99  # Callback receives a detached row.
+        return include
+    with instrument(m, tmp_path, collection_plan=create_plan(DEFAULT_TASK_NAME, 'pilot'),
+                    row_filter=include_row):
+        totals = m.run_task(cfg, Suite(), 1, object(), 8, total_episodes=8, total_successes=3)
+    assert seen_rows == [0, 1, 2, 3, 4]
+    assert totals == (8 + 5 - len(skipped), 3 + 5 - len(skipped))
+    assert Env.closed_count == closed_before + 5 - len(skipped)
+    assert len(created) == 5 - len(skipped)
+    manifests = [read_manifest(path.parent) for path in tmp_path.glob('*/manifest.json')]
+    assert sorted(item['metadata']['init_state_index'] for item in manifests) == sorted(set(range(5)) - skipped)
+
+
+def test_invalid_row_filter_rejected_before_writing(tmp_path):
+    from vla_trajectory.oft import instrument
+    with pytest.raises(ValueError, match='row_filter'):
+        with instrument(evaluator(), tmp_path, row_filter=True):
+            pass
+    assert not list(tmp_path.iterdir())
+
+
+def official_instruction_evaluator(*, keyword_query, stale_query=False):
+    """Mirror robot_utils.get_action's obs/task_label parameter names."""
+    m = instruction_evaluator(query_text='stale instruction' if stale_query else None)
+    call = ('get_action(cfg=cfg, model=model, obs=obs, task_label=instruction)'
+            if keyword_query else 'get_action(cfg, model, obs, instruction)')
+    exec('''
+def get_action(cfg, model, obs, task_label, processor=None, action_head=None,
+               proprio_projector=None, noisy_action_projector=None, use_film=False):
+    model_instructions.append(task_label)
+    # Read the observation so an unbound obs alias cannot silently pass.
+    return np.zeros((1, 7)) + float(obs['state'][0])
+def run_episode(cfg, env, task_description, model=None, initial_state=None):
+    episode_instructions.append(task_description)
+    obs = env.reset()
+    try:
+        env.step([0] * 7)
+        instruction = task_description if query_text is None else query_text
+        actions = QUERY_CALL
+        env.step(actions[0])
+    except Exception as exc:
+        log_message(f'Episode error: {exc}')
+    return False, []
+'''.replace('QUERY_CALL', call), m.__dict__)
+    return m
+
+
+@pytest.mark.parametrize('keyword_query', [False, True])
+@pytest.mark.parametrize('stale_query', [False, True])
+def test_official_obs_task_label_signature_verifies_exact_instruction(tmp_path, keyword_query, stale_query):
+    from vla_trajectory.oft import instrument
+    from vla_trajectory.recorder import read_manifest, read_steps
+    m = official_instruction_evaluator(keyword_query=keyword_query, stale_query=stale_query)
+    originals = m.run_episode, m.get_action
+    prompt = 'first cheese then butter'
+    if stale_query:
+        with pytest.raises(RuntimeError, match='instruction'):
+            with instrument(m, tmp_path, instruction_override=prompt):
+                m.run_episode(config(), Env(), 'official original')
+    else:
+        with instrument(m, tmp_path, instruction_override=prompt):
+            m.run_episode(config(), Env(), 'official original')
+    assert (m.run_episode, m.get_action) == originals
+    ep = next(tmp_path.iterdir())
+    manifest = read_manifest(ep)
+    assert manifest['metadata']['original_task_description'] == 'official original'
+    assert manifest['metadata']['task_description'] == prompt
+    query = json.loads((ep / 'queries.json').read_text())['queries'][0]
+    actual = 'stale instruction' if stale_query else prompt
+    assert query['instruction'] == actual
+    assert query['instruction_sha256'] == hashlib.sha256(actual.encode()).hexdigest()
+    assert query['status'] == ('error' if stale_query else 'complete')
+    assert manifest['status'] == ('error' if stale_query else 'complete')
+    assert m.model_instructions == ([] if stale_query else [prompt])
+    if not stale_query:
+        assert read_steps(ep)[1]['context']['instruction'] == prompt
+
+
+def test_official_keyword_query_without_override_preserves_native_instruction(tmp_path):
+    from vla_trajectory.oft import instrument
+    from vla_trajectory.recorder import read_manifest
+    m = official_instruction_evaluator(keyword_query=True)
+    with instrument(m, tmp_path):
+        m.run_episode(config(), Env(), 'native official instruction')
+    ep = next(tmp_path.iterdir())
+    assert read_manifest(ep)['status'] == 'complete'
+    query = json.loads((ep / 'queries.json').read_text())['queries'][0]
+    assert query['instruction'] == 'native official instruction'
+    assert query['status'] == 'complete'
 
