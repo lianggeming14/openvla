@@ -1,0 +1,835 @@
+{
+  "schema_version": 1,
+  "task_suite_name": "libero_10",
+  "fixed_model_configuration": {
+    "pretrained_checkpoint": "moojink/openvla-7b-oft-finetuned-libero-10",
+    "load_in_4bit": true,
+    "num_trials_per_task": 1,
+    "weight_policy": "Use the same checkpoint and quantization for all conditions; do not substitute a model."
+  },
+  "groups": [
+    {
+      "group_id": 1,
+      "task_name": "LIVING_ROOM_SCENE2_put_both_the_cream_cheese_box_and_the_butter_in_the_basket",
+      "bddl_file": "LIVING_ROOM_SCENE2_put_both_the_cream_cheese_box_and_the_butter_in_the_basket.bddl",
+      "subgoals": {
+        "A": {
+          "label": "cream cheese box into basket",
+          "kind": "placement",
+          "object_id": "cream_cheese_1",
+          "target_id": "basket_1_contain_region",
+          "goal_predicate": "In(cream_cheese_1, basket_1_contain_region)",
+          "simulator_predicate_key": "in(cream_cheese_1, basket_1_contain_region)"
+        },
+        "B": {
+          "label": "butter into basket",
+          "kind": "placement",
+          "object_id": "butter_1",
+          "target_id": "basket_1_contain_region",
+          "goal_predicate": "In(butter_1, basket_1_contain_region)",
+          "simulator_predicate_key": "in(butter_1, basket_1_contain_region)"
+        }
+      },
+      "official_goal_predicates": [
+        "In(cream_cheese_1, basket_1_contain_region)",
+        "In(butter_1, basket_1_contain_region)"
+      ],
+      "additional_official_goal_predicates": [],
+      "bddl_initially_true_goal_predicates": [],
+      "conditions": [
+        {
+          "condition_id": "AB",
+          "enabled": true,
+          "instruction": "First put the cream cheese box in the basket, then put the butter in the basket.",
+          "expected_order": [
+            "A",
+            "B"
+          ],
+          "expected_order_metric": "completion_order",
+          "episodes_planned": 20,
+          "state_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ]
+        },
+        {
+          "condition_id": "BA",
+          "enabled": true,
+          "instruction": "First put the butter in the basket, then put the cream cheese box in the basket.",
+          "expected_order": [
+            "B",
+            "A"
+          ],
+          "expected_order_metric": "completion_order",
+          "episodes_planned": 20,
+          "state_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ]
+        }
+      ],
+      "neutral_condition": {
+        "condition_id": "neutral",
+        "enabled": false,
+        "instruction": "Put both the cream cheese box and the butter in the basket.",
+        "expected_order": null,
+        "episodes_planned": 0
+      },
+      "grasp_order": {
+        "metric": "grasp_order",
+        "object_pair": [
+          "cream_cheese_1",
+          "butter_1"
+        ],
+        "pair_comparison_applicable": true,
+        "source": "separate verified grasp evidence or video review; never goal predicate transitions"
+      },
+      "completion_order": {
+        "metric": "completion_order",
+        "subgoal_predicates": {
+          "A": "In(cream_cheese_1, basket_1_contain_region)",
+          "B": "In(butter_1, basket_1_contain_region)"
+        },
+        "source": "observed simulator goal predicate transitions",
+        "simulator_subgoal_keys": {
+          "A": "in(cream_cheese_1, basket_1_contain_region)",
+          "B": "in(butter_1, basket_1_contain_region)"
+        }
+      },
+      "episodes_planned": 40,
+      "notes": [],
+      "official_simulator_predicate_keys": [
+        "in(cream_cheese_1, basket_1_contain_region)",
+        "in(butter_1, basket_1_contain_region)"
+      ],
+      "additional_official_simulator_predicate_keys": [],
+      "bddl_initially_true_simulator_predicate_keys": []
+    },
+    {
+      "group_id": 2,
+      "task_name": "LIVING_ROOM_SCENE1_put_both_the_alphabet_soup_and_the_cream_cheese_box_in_the_basket",
+      "bddl_file": "LIVING_ROOM_SCENE1_put_both_the_alphabet_soup_and_the_cream_cheese_box_in_the_basket.bddl",
+      "subgoals": {
+        "A": {
+          "label": "alphabet soup into basket",
+          "kind": "placement",
+          "object_id": "alphabet_soup_1",
+          "target_id": "basket_1_contain_region",
+          "goal_predicate": "In(alphabet_soup_1, basket_1_contain_region)",
+          "simulator_predicate_key": "in(alphabet_soup_1, basket_1_contain_region)"
+        },
+        "B": {
+          "label": "cream cheese box into basket",
+          "kind": "placement",
+          "object_id": "cream_cheese_1",
+          "target_id": "basket_1_contain_region",
+          "goal_predicate": "In(cream_cheese_1, basket_1_contain_region)",
+          "simulator_predicate_key": "in(cream_cheese_1, basket_1_contain_region)"
+        }
+      },
+      "official_goal_predicates": [
+        "In(alphabet_soup_1, basket_1_contain_region)",
+        "In(cream_cheese_1, basket_1_contain_region)"
+      ],
+      "additional_official_goal_predicates": [],
+      "bddl_initially_true_goal_predicates": [],
+      "conditions": [
+        {
+          "condition_id": "AB",
+          "enabled": true,
+          "instruction": "First put the alphabet soup in the basket, then put the cream cheese box in the basket.",
+          "expected_order": [
+            "A",
+            "B"
+          ],
+          "expected_order_metric": "completion_order",
+          "episodes_planned": 20,
+          "state_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ]
+        },
+        {
+          "condition_id": "BA",
+          "enabled": true,
+          "instruction": "First put the cream cheese box in the basket, then put the alphabet soup in the basket.",
+          "expected_order": [
+            "B",
+            "A"
+          ],
+          "expected_order_metric": "completion_order",
+          "episodes_planned": 20,
+          "state_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ]
+        }
+      ],
+      "neutral_condition": {
+        "condition_id": "neutral",
+        "enabled": false,
+        "instruction": "Put both the alphabet soup and the cream cheese box in the basket.",
+        "expected_order": null,
+        "episodes_planned": 0
+      },
+      "grasp_order": {
+        "metric": "grasp_order",
+        "object_pair": [
+          "alphabet_soup_1",
+          "cream_cheese_1"
+        ],
+        "pair_comparison_applicable": true,
+        "source": "separate verified grasp evidence or video review; never goal predicate transitions"
+      },
+      "completion_order": {
+        "metric": "completion_order",
+        "subgoal_predicates": {
+          "A": "In(alphabet_soup_1, basket_1_contain_region)",
+          "B": "In(cream_cheese_1, basket_1_contain_region)"
+        },
+        "source": "observed simulator goal predicate transitions",
+        "simulator_subgoal_keys": {
+          "A": "in(alphabet_soup_1, basket_1_contain_region)",
+          "B": "in(cream_cheese_1, basket_1_contain_region)"
+        }
+      },
+      "episodes_planned": 40,
+      "notes": [],
+      "official_simulator_predicate_keys": [
+        "in(alphabet_soup_1, basket_1_contain_region)",
+        "in(cream_cheese_1, basket_1_contain_region)"
+      ],
+      "additional_official_simulator_predicate_keys": [],
+      "bddl_initially_true_simulator_predicate_keys": []
+    },
+    {
+      "group_id": 3,
+      "task_name": "LIVING_ROOM_SCENE5_put_the_white_mug_on_the_left_plate_and_put_the_yellow_and_white_mug_on_the_right_plate",
+      "bddl_file": "LIVING_ROOM_SCENE5_put_the_white_mug_on_the_left_plate_and_put_the_yellow_and_white_mug_on_the_right_plate.bddl",
+      "subgoals": {
+        "A": {
+          "label": "white mug onto left plate",
+          "kind": "placement",
+          "object_id": "porcelain_mug_1",
+          "target_id": "plate_1",
+          "target_initial_position_label": "left plate",
+          "goal_predicate": "On(porcelain_mug_1, plate_1)",
+          "simulator_predicate_key": "on(porcelain_mug_1, plate_1)"
+        },
+        "B": {
+          "label": "yellow and white mug onto right plate",
+          "kind": "placement",
+          "object_id": "white_yellow_mug_1",
+          "target_id": "plate_2",
+          "target_initial_position_label": "right plate",
+          "goal_predicate": "On(white_yellow_mug_1, plate_2)",
+          "simulator_predicate_key": "on(white_yellow_mug_1, plate_2)"
+        }
+      },
+      "official_goal_predicates": [
+        "On(porcelain_mug_1, plate_1)",
+        "On(white_yellow_mug_1, plate_2)"
+      ],
+      "additional_official_goal_predicates": [],
+      "bddl_initially_true_goal_predicates": [],
+      "conditions": [
+        {
+          "condition_id": "AB",
+          "enabled": true,
+          "instruction": "First put the white mug on the left plate, then put the yellow and white mug on the right plate.",
+          "expected_order": [
+            "A",
+            "B"
+          ],
+          "expected_order_metric": "completion_order",
+          "episodes_planned": 20,
+          "state_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ]
+        },
+        {
+          "condition_id": "BA",
+          "enabled": true,
+          "instruction": "First put the yellow and white mug on the right plate, then put the white mug on the left plate.",
+          "expected_order": [
+            "B",
+            "A"
+          ],
+          "expected_order_metric": "completion_order",
+          "episodes_planned": 20,
+          "state_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ]
+        }
+      ],
+      "neutral_condition": {
+        "condition_id": "neutral",
+        "enabled": false,
+        "instruction": "Put the white mug on the left plate and put the yellow and white mug on the right plate.",
+        "expected_order": null,
+        "episodes_planned": 0
+      },
+      "grasp_order": {
+        "metric": "grasp_order",
+        "object_pair": [
+          "porcelain_mug_1",
+          "white_yellow_mug_1"
+        ],
+        "pair_comparison_applicable": true,
+        "source": "separate verified grasp evidence or video review; never goal predicate transitions"
+      },
+      "completion_order": {
+        "metric": "completion_order",
+        "subgoal_predicates": {
+          "A": "On(porcelain_mug_1, plate_1)",
+          "B": "On(white_yellow_mug_1, plate_2)"
+        },
+        "source": "observed simulator goal predicate transitions",
+        "simulator_subgoal_keys": {
+          "A": "on(porcelain_mug_1, plate_1)",
+          "B": "on(white_yellow_mug_1, plate_2)"
+        }
+      },
+      "episodes_planned": 40,
+      "notes": [],
+      "official_simulator_predicate_keys": [
+        "on(porcelain_mug_1, plate_1)",
+        "on(white_yellow_mug_1, plate_2)"
+      ],
+      "additional_official_simulator_predicate_keys": [],
+      "bddl_initially_true_simulator_predicate_keys": []
+    },
+    {
+      "group_id": 4,
+      "task_name": "LIVING_ROOM_SCENE6_put_the_white_mug_on_the_plate_and_put_the_chocolate_pudding_to_the_right_of_the_plate",
+      "bddl_file": "LIVING_ROOM_SCENE6_put_the_white_mug_on_the_plate_and_put_the_chocolate_pudding_to_the_right_of_the_plate.bddl",
+      "subgoals": {
+        "A": {
+          "label": "white mug onto plate",
+          "kind": "placement",
+          "object_id": "porcelain_mug_1",
+          "target_id": "plate_1",
+          "goal_predicate": "On(porcelain_mug_1, plate_1)",
+          "simulator_predicate_key": "on(porcelain_mug_1, plate_1)"
+        },
+        "B": {
+          "label": "chocolate pudding to the right of plate",
+          "kind": "placement",
+          "object_id": "chocolate_pudding_1",
+          "target_id": "living_room_table_plate_right_region",
+          "goal_predicate": "On(chocolate_pudding_1, living_room_table_plate_right_region)",
+          "simulator_predicate_key": "on(chocolate_pudding_1, living_room_table_plate_right_region)"
+        }
+      },
+      "official_goal_predicates": [
+        "On(porcelain_mug_1, plate_1)",
+        "On(chocolate_pudding_1, living_room_table_plate_right_region)"
+      ],
+      "additional_official_goal_predicates": [],
+      "bddl_initially_true_goal_predicates": [],
+      "conditions": [
+        {
+          "condition_id": "AB",
+          "enabled": true,
+          "instruction": "First put the white mug on the plate, then put the chocolate pudding to the right of the plate.",
+          "expected_order": [
+            "A",
+            "B"
+          ],
+          "expected_order_metric": "completion_order",
+          "episodes_planned": 20,
+          "state_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ]
+        },
+        {
+          "condition_id": "BA",
+          "enabled": true,
+          "instruction": "First put the chocolate pudding to the right of the plate, then put the white mug on the plate.",
+          "expected_order": [
+            "B",
+            "A"
+          ],
+          "expected_order_metric": "completion_order",
+          "episodes_planned": 20,
+          "state_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ]
+        }
+      ],
+      "neutral_condition": {
+        "condition_id": "neutral",
+        "enabled": false,
+        "instruction": "Put the white mug on the plate and put the chocolate pudding to the right of the plate.",
+        "expected_order": null,
+        "episodes_planned": 0
+      },
+      "grasp_order": {
+        "metric": "grasp_order",
+        "object_pair": [
+          "porcelain_mug_1",
+          "chocolate_pudding_1"
+        ],
+        "pair_comparison_applicable": true,
+        "source": "separate verified grasp evidence or video review; never goal predicate transitions"
+      },
+      "completion_order": {
+        "metric": "completion_order",
+        "subgoal_predicates": {
+          "A": "On(porcelain_mug_1, plate_1)",
+          "B": "On(chocolate_pudding_1, living_room_table_plate_right_region)"
+        },
+        "source": "observed simulator goal predicate transitions",
+        "simulator_subgoal_keys": {
+          "A": "on(porcelain_mug_1, plate_1)",
+          "B": "on(chocolate_pudding_1, living_room_table_plate_right_region)"
+        }
+      },
+      "episodes_planned": 40,
+      "notes": [],
+      "official_simulator_predicate_keys": [
+        "on(porcelain_mug_1, plate_1)",
+        "on(chocolate_pudding_1, living_room_table_plate_right_region)"
+      ],
+      "additional_official_simulator_predicate_keys": [],
+      "bddl_initially_true_simulator_predicate_keys": []
+    },
+    {
+      "group_id": 5,
+      "task_name": "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove",
+      "bddl_file": "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove.bddl",
+      "subgoals": {
+        "A": {
+          "label": "initially left moka pot onto stove",
+          "kind": "placement",
+          "object_id": "moka_pot_2",
+          "initial_position_label": "left",
+          "initial_region_id": "kitchen_table_moka_pot_left_init_region",
+          "target_id": "flat_stove_1_cook_region",
+          "goal_predicate": "On(moka_pot_2, flat_stove_1_cook_region)",
+          "simulator_predicate_key": "on(moka_pot_2, flat_stove_1_cook_region)"
+        },
+        "B": {
+          "label": "initially right moka pot onto stove",
+          "kind": "placement",
+          "object_id": "moka_pot_1",
+          "initial_position_label": "right",
+          "initial_region_id": "kitchen_table_moka_pot_right_init_region",
+          "target_id": "flat_stove_1_cook_region",
+          "goal_predicate": "On(moka_pot_1, flat_stove_1_cook_region)",
+          "simulator_predicate_key": "on(moka_pot_1, flat_stove_1_cook_region)"
+        }
+      },
+      "official_goal_predicates": [
+        "On(moka_pot_1, flat_stove_1_cook_region)",
+        "On(moka_pot_2, flat_stove_1_cook_region)",
+        "Turnon(flat_stove_1)"
+      ],
+      "additional_official_goal_predicates": [
+        "Turnon(flat_stove_1)"
+      ],
+      "bddl_initially_true_goal_predicates": [
+        "Turnon(flat_stove_1)"
+      ],
+      "conditions": [
+        {
+          "condition_id": "AB",
+          "enabled": true,
+          "instruction": "First put the moka pot initially on the left on the stove, then put the moka pot initially on the right on the stove.",
+          "expected_order": [
+            "A",
+            "B"
+          ],
+          "expected_order_metric": "completion_order",
+          "episodes_planned": 20,
+          "state_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ]
+        },
+        {
+          "condition_id": "BA",
+          "enabled": true,
+          "instruction": "First put the moka pot initially on the right on the stove, then put the moka pot initially on the left on the stove.",
+          "expected_order": [
+            "B",
+            "A"
+          ],
+          "expected_order_metric": "completion_order",
+          "episodes_planned": 20,
+          "state_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ]
+        }
+      ],
+      "neutral_condition": {
+        "condition_id": "neutral",
+        "enabled": false,
+        "instruction": "Put both moka pots on the stove.",
+        "expected_order": null,
+        "episodes_planned": 0
+      },
+      "grasp_order": {
+        "metric": "grasp_order",
+        "object_pair": [
+          "moka_pot_2",
+          "moka_pot_1"
+        ],
+        "pair_comparison_applicable": true,
+        "source": "separate verified grasp evidence or video review; never goal predicate transitions"
+      },
+      "completion_order": {
+        "metric": "completion_order",
+        "subgoal_predicates": {
+          "A": "On(moka_pot_2, flat_stove_1_cook_region)",
+          "B": "On(moka_pot_1, flat_stove_1_cook_region)"
+        },
+        "source": "observed simulator goal predicate transitions",
+        "simulator_subgoal_keys": {
+          "A": "on(moka_pot_2, flat_stove_1_cook_region)",
+          "B": "on(moka_pot_1, flat_stove_1_cook_region)"
+        }
+      },
+      "episodes_planned": 40,
+      "notes": [
+        "The BDDL assigns moka_pot_2 to the left initial region and moka_pot_1 to the right initial region. A and B retain those identities throughout the episode.",
+        "The official task also requires the stove to be on; BDDL initializes it on. This additional goal contributes to official success but is not one of the two ordered subgoals."
+      ],
+      "official_simulator_predicate_keys": [
+        "on(moka_pot_1, flat_stove_1_cook_region)",
+        "on(moka_pot_2, flat_stove_1_cook_region)",
+        "turnon(flat_stove_1)"
+      ],
+      "additional_official_simulator_predicate_keys": [
+        "turnon(flat_stove_1)"
+      ],
+      "bddl_initially_true_simulator_predicate_keys": [
+        "turnon(flat_stove_1)"
+      ]
+    },
+    {
+      "group_id": 6,
+      "task_name": "KITCHEN_SCENE3_turn_on_the_stove_and_put_the_moka_pot_on_it",
+      "bddl_file": "KITCHEN_SCENE3_turn_on_the_stove_and_put_the_moka_pot_on_it.bddl",
+      "subgoals": {
+        "A": {
+          "label": "turn on stove",
+          "kind": "turn_on",
+          "fixture_id": "flat_stove_1",
+          "goal_predicate": "Turnon(flat_stove_1)",
+          "simulator_predicate_key": "turnon(flat_stove_1)"
+        },
+        "B": {
+          "label": "moka pot onto stove",
+          "kind": "placement",
+          "object_id": "moka_pot_1",
+          "target_id": "flat_stove_1_cook_region",
+          "goal_predicate": "On(moka_pot_1, flat_stove_1_cook_region)",
+          "simulator_predicate_key": "on(moka_pot_1, flat_stove_1_cook_region)"
+        }
+      },
+      "official_goal_predicates": [
+        "Turnon(flat_stove_1)",
+        "On(moka_pot_1, flat_stove_1_cook_region)"
+      ],
+      "additional_official_goal_predicates": [],
+      "bddl_initially_true_goal_predicates": [],
+      "conditions": [
+        {
+          "condition_id": "AB",
+          "enabled": true,
+          "instruction": "First turn on the stove, then put the moka pot on the stove.",
+          "expected_order": [
+            "A",
+            "B"
+          ],
+          "expected_order_metric": "completion_order",
+          "episodes_planned": 20,
+          "state_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ]
+        },
+        {
+          "condition_id": "BA",
+          "enabled": true,
+          "instruction": "First put the moka pot on the stove, then turn on the stove.",
+          "expected_order": [
+            "B",
+            "A"
+          ],
+          "expected_order_metric": "completion_order",
+          "episodes_planned": 20,
+          "state_indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ]
+        }
+      ],
+      "neutral_condition": {
+        "condition_id": "neutral",
+        "enabled": false,
+        "instruction": "Turn on the stove and put the moka pot on it.",
+        "expected_order": null,
+        "episodes_planned": 0
+      },
+      "grasp_order": {
+        "metric": "grasp_order",
+        "object_pair": null,
+        "pair_comparison_applicable": false,
+        "source": "separate verified grasp evidence or video review; never goal predicate transitions"
+      },
+      "completion_order": {
+        "metric": "completion_order",
+        "subgoal_predicates": {
+          "A": "Turnon(flat_stove_1)",
+          "B": "On(moka_pot_1, flat_stove_1_cook_region)"
+        },
+        "source": "observed simulator goal predicate transitions",
+        "simulator_subgoal_keys": {
+          "A": "turnon(flat_stove_1)",
+          "B": "on(moka_pot_1, flat_stove_1_cook_region)"
+        }
+      },
+      "episodes_planned": 40,
+      "notes": [
+        "A is a stove activation event, not a grasp. Completion order compares Turnon(flat_stove_1) with On(moka_pot_1, flat_stove_1_cook_region).",
+        "Retain any observed moka-pot grasp event separately. A two-object grasp-order comparison is not applicable to this group."
+      ],
+      "official_simulator_predicate_keys": [
+        "turnon(flat_stove_1)",
+        "on(moka_pot_1, flat_stove_1_cook_region)"
+      ],
+      "additional_official_simulator_predicate_keys": [],
+      "bddl_initially_true_simulator_predicate_keys": []
+    }
+  ],
+  "artifact_type": "generated_experiment_configuration",
+  "contains_experiment_results": false,
+  "provenance": {
+    "registry_source_sha256": "bda36986237839cd83eb52fc8199128daa065626c55e781d8c90b7acefb60352",
+    "libero_revision": "8f1084e3132a39270c3a13ebe37270a43ece2a01",
+    "note": "Task identities and runtime predicate keys verified locally; no model inference results."
+  }
+}

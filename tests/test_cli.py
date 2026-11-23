@@ -214,3 +214,59 @@ def test_video_cli_preserves_real_frame_mapping_and_reports_codec_errors(tmp_pat
     assert 'encoder unavailable' in capsys.readouterr().err
     assert not (tmp_path/'failed.mp4').exists()
 
+
+@pytest.mark.parametrize('instruction', ['first cheese then butter', '', '   '])
+def test_collect_instruction_reaches_query_and_stays_out_of_upstream_flags(tmp_path, instruction):
+    import hashlib
+    import subprocess
+    import sys
+    oft_root = tmp_path / 'oft'
+    package = oft_root / 'experiments/robot/libero'
+    package.mkdir(parents=True)
+    for directory in (oft_root/'experiments', oft_root/'experiments/robot', package):
+        (directory/'__init__.py').write_text('', encoding='utf-8')
+    (package/'run_libero_eval.py').write_text('''
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+Path('imported.txt').write_text('yes')
+import_argv = sys.argv[1:]
+episode_instructions = []
+model_instructions = []
+def get_action(cfg, model, observation, task_description):
+    model_instructions.append(task_description)
+    return np.zeros((1, 7))
+def process_action(action, model_family): return action
+def log_message(*args, **kwargs): pass
+def run_episode(cfg, env, task_description):
+    episode_instructions.append(task_description)
+    get_action(cfg, None, {'state': np.zeros(2)}, task_description)
+def eval_libero():
+    cfg = SimpleNamespace(num_steps_wait=0, num_open_loop_steps=1, task_suite_name='libero_10')
+    run_episode(cfg, SimpleNamespace(), 'official source description')
+    Path('forwarded.json').write_text(json.dumps({'import_argv': import_argv,
+        'eval_argv': sys.argv[1:], 'episode': episode_instructions, 'model': model_instructions}))
+''', encoding='utf-8')
+    options = ['--pretrained_checkpoint', 'moojink/openvla-7b-oft-finetuned-libero-10',
+               '--task_suite_name', 'libero_10', '--num_trials_per_task', '1',
+               '--load_in_4bit', 'True']
+    output = tmp_path / 'data'
+    completed = subprocess.run([sys.executable, '-m', 'vla_trajectory', 'collect',
+        '--oft-root', str(oft_root), '--output', str(output), '--instruction', instruction,
+        '--', *options], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
+    if not instruction.strip():
+        assert completed.returncode == 1, completed.stderr
+        assert 'instruction' in completed.stderr
+        assert not output.exists() and not (oft_root / 'imported.txt').exists()
+        return
+    assert completed.returncode == 0, completed.stderr
+    forwarded = json.loads((oft_root / 'forwarded.json').read_text())
+    assert forwarded['episode'] == forwarded['model'] == [instruction]
+    assert forwarded['import_argv'] == forwarded['eval_argv'] == options
+    ep = next(output.iterdir())
+    query = json.loads((ep / 'queries.json').read_text())['queries'][0]
+    assert query['instruction'] == instruction
+    assert query['instruction_sha256'] == hashlib.sha256(instruction.encode()).hexdigest()
+

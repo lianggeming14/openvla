@@ -20,6 +20,8 @@ def _json(value):
 
 
 def _collect(args):
+    if args.instruction is not None and not args.instruction.strip():
+        raise ValueError('instruction must be a nonblank string')
     root = Path(args.oft_root).expanduser().resolve()
     evaluator_path = root / 'experiments/robot/libero/run_libero_eval.py'
     if not evaluator_path.is_file():
@@ -46,7 +48,7 @@ def _collect(args):
             raise ValueError('Another OFT checkout is already imported; launch collect in a fresh Python process')
         from .oft import instrument
         with instrument(module, output, run_metadata={'oft_root':str(root), 'oft_revision':revision},
-                        collection_plan=plan):
+                        collection_plan=plan, instruction_override=args.instruction):
             module.eval_libero()
     finally:
         os.chdir(previous_cwd)
@@ -91,6 +93,7 @@ def main(argv=None):
     collect.add_argument('--oft-root', required=True)
     collect.add_argument('--output', required=True)
     collect.add_argument('--plan', help='Validated pilot/formal collection plan; place before --')
+    collect.add_argument('--instruction', help='Exact model instruction override; place before --')
     collect.add_argument('oft_args', nargs=argparse.REMAINDER)
     plan = sub.add_parser('plan', help='Write a five-state pilot or twenty-state formal plan')
     plan.add_argument('--stage', required=True, choices=('pilot', 'formal'))
